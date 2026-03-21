@@ -1,0 +1,28 @@
+services:
+  paperless-tax-exporter:
+    image: paperless-tax-exporter:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paperless-tax-exporter
+    restart: unless-stopped
+    ports:
+      - "5055:5000"       # Erreichbar unter http://NAS-IP:5055
+    environment:
+      # URL zu deiner Paperless NGX Instanz (intern im Netzwerk)
+      PAPERLESS_URL: "http://192.168.178.115:8000"
+      # API-Token aus Paperless UI → Mein Profil → Token generieren
+      PAPERLESS_TOKEN: "DEIN_TOKEN_HIER_EINTRAGEN"
+      # Ausgabepfad auf dem NAS (muss gemountet sein)
+      OUTPUT_DIR: "/output"
+    volumes:
+      # NAS-Pfad:Container-Pfad
+      - /volume1/downloads/steuerberater:/output
+    # Optional: ins gleiche Docker-Netzwerk wie Paperless, für direkte Kommunikation
+    # networks:
+    #   - paperless_default
+
+# networks:
+#   paperless_default:
+#     external: true
+#     name: paperless_default   # Name des bestehenden Paperless-Netzwerks anpassen

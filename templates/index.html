@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Steuerberater Export · komm|event</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header im komm|event CI -->
+    <header class="header">
+      <div class="header-inner">
+        <div class="header-logo">
+          <img src="/static/logo.png" alt="komm|event" />
+          <div class="header-divider"></div>
+          <div class="header-title">
+            <span class="header-title-main">Steuerberater Export</span>
+            <span class="header-title-sub">Paperless NGX · Belegverwaltung</span>
+          </div>
+        </div>
+        <div id="connection-status" class="badge badge-checking">Verbinde…</div>
+      </div>
+    </header>
+
+    <main class="main">
+
+      <!-- Konfigurationscard -->
+      <section class="card" id="config-card">
+        <h2 class="card-title">Export konfigurieren</h2>
+
+        <!-- Hinweis Sicherheit -->
+        <div class="info-box">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>Paperless wird ausschließlich lesend verwendet. Exportierte Dateien werden im konfigurierten Ausgabepfad gespeichert.</span>
+        </div>
+
+        <!-- Schnellauswahl Kalenderjahr -->
+        <div class="field-group">
+          <label class="field-label">Schnellauswahl Kalenderjahr</label>
+          <div class="quick-years" id="quick-years"></div>
+        </div>
+
+        <!-- Datumsbereich -->
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label" for="date-from">Von</label>
+            <input class="input" type="date" id="date-from" />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="date-to">Bis</label>
+            <input class="input" type="date" id="date-to" />
+          </div>
+        </div>
+
+        <!-- Tags -->
+        <div class="field-group">
+          <label class="field-label">
+            Tags filtern
+            <span class="hint">Kein Tag gewählt = alle Dokumente im Zeitraum</span>
+          </label>
+          <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
+          <div id="tag-list" class="tag-list hidden"></div>
+          <div id="tag-error" class="error-msg hidden"></div>
+        </div>
+
+        <!-- Ausgabepfad -->
+        <div class="field-group">
+          <label class="field-label">Ausgabepfad</label>
+          <div class="output-path">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span id="output-path-text">…</span>
+          </div>
+        </div>
+
+        <!-- Starten -->
+        <div class="actions">
+          <button class="btn btn-primary" id="start-btn" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            Export starten
+          </button>
+          <span class="selected-info" id="selected-info"></span>
+        </div>
+      </section>
+
+      <!-- Job-Fortschritt -->
+      <section class="card hidden" id="progress-card">
+        <h2 class="card-title" id="progress-title">Export wird durchgeführt…</h2>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <div class="log-box" id="log-box"></div>
+        <div class="actions" id="download-area" style="display:none;">
+          <a class="btn btn-success" href="/api/download-excel" download>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Excel herunterladen
+          </a>
+          <button class="btn btn-secondary" id="new-export-btn">
+            Neuer Export
+          </button>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="footer">
+      <a href="http://www.kommevent.at/" target="_blank">komm|event</a>
+      · Agentur für Kommunikation &amp; Events
+      · Steuerberater Export v1.0
+    </footer>
+
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
