@@ -136,6 +136,62 @@ paperless-tax-exporter/
 
 ---
 
+## Deployment via Dockhand
+
+Der bevorzugte Weg ist die Verwaltung als Stack in [Dockhand](https://dockhand.pro).  
+Das Docker-Image wird automatisch per GitHub Actions gebaut und auf `ghcr.io` bereitgestellt.
+
+### 1. Image wird automatisch gebaut
+
+Bei jedem Push auf `main` baut GitHub Actions das Image und pusht es auf:
+```
+ghcr.io/sturmi77/paperless-tax-exporter:latest
+```
+
+### 2. Stack in Dockhand anlegen
+
+In Dockhand: **Stacks → + Create → Git Repository**
+
+| Feld | Wert |
+|------|------|
+| Repository URL | `https://github.com/Sturmi77/paperless-tax-exporter` |
+| Branch | `main` |
+| Compose file | `docker-compose.yml` |
+
+### 3. Secrets als .env hinterlegen
+
+In Dockhand beim Stack-Editor die `.env`-Werte direkt eingeben  
+(oder `.env`-Datei auf dem NAS unter `/volume1/docker/dockhand/stacks/paperless-tax-exporter/` ablegen):
+
+```env
+PAPERLESS_URL=http://192.168.178.115:8000
+PAPERLESS_TOKEN=dein-token-hier
+```
+
+→ Vorlage: [`.env.example`](.env.example)
+
+### 4. Ausgabepfad auf dem NAS anlegen
+
+```bash
+mkdir -p /volume1/downloads/steuerberater
+```
+
+### 5. Deployen
+
+In Dockhand: **Deploy** klicken → Container startet mit Image von `ghcr.io`.
+
+**Web-UI:** `http://192.168.178.115:5055`
+
+---
+
+## Updates einspielen
+
+Bei Push auf `main` wird automatisch ein neues Image gebaut.  
+In Dockhand: **Stack → Pull & Redeploy** – fertig.
+
+
+---
+
 ## Lizenz
 
 Internes Projekt – keine öffentliche Lizenz.

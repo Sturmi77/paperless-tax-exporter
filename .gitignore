@@ -15,6 +15,7 @@ env/
 # Secrets / Konfiguration mit Tokens
 .env
 .env.*
+!.env.example
 secrets.yml
 
 # Docker
