@@ -73,8 +73,12 @@ def get_all_tags():
         tags.extend(data.get("results", []))
         next_url = data.get("next")
         if next_url:
-            # Nur den Pfad weitergeben
-            url = next_url.replace(PAPERLESS_URL.rstrip("/"), "")
+            # Nur den Pfad extrahieren – robust gegen verschiedene Hostnamen
+            from urllib.parse import urlparse
+            parsed = urlparse(next_url)
+            url = parsed.path + ("?" + parsed.query if parsed.query else "")
+            if not url.startswith("/api/"):
+                url = None  # Sicherheits-Fallback gegen Endlosschleife
         else:
             url = None
     return tags

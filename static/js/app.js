@@ -258,7 +258,7 @@ async function pollStatus() {
         bar.style.width = "100%";
         bar.style.background = "#2e7d32";
         $("download-area").style.display = "flex";
-        $("progress-card").querySelector(".card-title").textContent = "Export abgeschlossen";
+        const ct = $("progress-card").querySelector(".card-title"); if (ct) ct.textContent = "Export abgeschlossen";
       }
     }
   } catch { /* ignore polling errors */ }
