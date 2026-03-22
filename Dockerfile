@@ -9,7 +9,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# App-Dateien
+# App-Dateien (ARG vor COPY erzwingt Cache-Invalidierung bei jedem Build)
+ARG CACHEBUST=1
 COPY app.py excel_export.py pdf_export.py ./
 COPY templates/ templates/
 COPY static/ static/
