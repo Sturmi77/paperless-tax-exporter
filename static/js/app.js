@@ -87,46 +87,26 @@ function clearActiveYear() {
 
 // ─── Tags laden ────────────────────────────────────────────────────────
 async function loadTags() {
-  const dbg = document.createElement("div");
-  dbg.id = "debug-banner";
-  dbg.style.cssText = "position:fixed;top:0;left:0;right:0;background:#ff0;color:#000;font-size:13px;padding:6px 12px;z-index:9999;font-family:monospace;";
-  dbg.textContent = "loadTags: gestartet…";
-  document.body.appendChild(dbg);
-
-  const setDbg = msg => { dbg.textContent = msg; };
-
   try {
-    setDbg("loadTags: rufe /api/health auf…");
     const healthRes  = await fetch("/api/health");
     const healthData = await healthRes.json();
-    setDbg("health: " + JSON.stringify(healthData).slice(0, 120));
 
     if (!healthData.token_configured) {
-      throw new Error(
-        "PAPERLESS_TOKEN nicht gesetzt. " +
-        "Bitte .env Datei auf dem NAS anlegen (siehe README)."
-      );
+      throw new Error("PAPERLESS_TOKEN nicht gesetzt. Bitte .env auf dem NAS anlegen.");
     }
 
-    setDbg("loadTags: rufe /api/tags auf…");
-    const res = await fetch("/api/tags");
-    setDbg("tags status: " + res.status);
+    const res  = await fetch("/api/tags");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
     allTags = data.tags || [];
-    setDbg("tags geladen: " + allTags.length + " Tags → renderTags()");
     renderTags();
     $("tag-loading").classList.add("hidden");
     $("tag-list").classList.remove("hidden");
-    setDbg("✓ Tags OK – " + allTags.length + " Tags geladen");
-    setTimeout(() => dbg.remove(), 4000);
-
     $("start-btn").disabled = false;
     updateInfo();
   } catch (err) {
-    setDbg("FEHLER: " + err.message);
     $("tag-loading").classList.add("hidden");
     $("tag-error").textContent = `Fehler beim Laden der Tags: ${err.message}`;
     $("tag-error").classList.remove("hidden");
@@ -135,63 +115,41 @@ async function loadTags() {
 }
 
 function renderTags() {
-  const list = $("tag-list");
-  list.innerHTML = "";
+  const container = $("tag-list");
+  container.innerHTML = "";
 
   if (allTags.length === 0) {
-    list.innerHTML = '<span style="color:#a0aec0;font-size:.88rem;">Keine Tags in Paperless gefunden.</span>';
+    container.innerHTML = '<span style="color:#a0aec0;font-size:.88rem;">Keine Tags in Paperless gefunden.</span>';
     return;
   }
 
-  // Tags alphabetisch sortieren
-  const sorted = [...allTags].sort((a, b) =>
-    a.name.localeCompare(b.name, "de")
-  );
+  const sorted = [...allTags].sort((a, b) => a.name.localeCompare(b.name, "de"));
+
+  const select = document.createElement("select");
+  select.id      = "tag-select";
+  select.multiple = true;
+  select.size    = Math.min(sorted.length, 8);
+  select.style.cssText = "width:100%;border:1.5px solid #c5d2d4;border-radius:6px;padding:4px;font-size:.93rem;font-family:inherit;background:#fff;color:#444;outline:none;";
 
   sorted.forEach(tag => {
-    const chip = document.createElement("div");
-    chip.className = "tag-chip" + (selectedTags.has(tag.id) ? " selected" : "");
-    chip.dataset.id = tag.id;
-
-    // Farbpunkt aus Paperless-Farbe
-    const dot = document.createElement("span");
-    dot.className = "tag-dot";
-    if (tag.colour) {
-      dot.style.background = paperlessColor(tag.colour);
-      dot.style.opacity = "1";
-    }
-
-    const label = document.createElement("span");
-    label.textContent = tag.name;
-
-    chip.appendChild(dot);
-    chip.appendChild(label);
-    chip.addEventListener("click", () => toggleTag(tag.id, chip));
-    list.appendChild(chip);
+    const opt = document.createElement("option");
+    opt.value       = tag.id;
+    opt.textContent = tag.name;
+    select.appendChild(opt);
   });
-}
 
-function toggleTag(tagId, chip) {
-  if (selectedTags.has(tagId)) {
-    selectedTags.delete(tagId);
-    chip.classList.remove("selected");
-  } else {
-    selectedTags.add(tagId);
-    chip.classList.add("selected");
-  }
-  updateInfo();
-}
+  select.addEventListener("change", () => {
+    selectedTags.clear();
+    Array.from(select.selectedOptions).forEach(o => selectedTags.add(Number(o.value)));
+    updateInfo();
+  });
 
-// Paperless liefert Farbnummern 1-9 oder Hex-Werte
-function paperlessColor(c) {
-  const map = {
-    1: "#a6cee3", 2: "#1f78b4", 3: "#b2df8a", 4: "#33a02c",
-    5: "#fb9a99", 6: "#e31a1c", 7: "#fdbf6f", 8: "#ff7f00",
-    9: "#cab2d6",
-  };
-  if (typeof c === "number") return map[c] || "#718096";
-  if (typeof c === "string" && c.startsWith("#")) return c;
-  return "#718096";
+  const hint = document.createElement("div");
+  hint.style.cssText = "font-size:.8rem;color:#718096;margin-top:4px;";
+  hint.textContent   = "Strg+Klick für Mehrfachauswahl · Keine Auswahl = alle Dokumente";
+
+  container.appendChild(select);
+  container.appendChild(hint);
 }
 
 // ─── Info-Text ─────────────────────────────────────────────────────────
