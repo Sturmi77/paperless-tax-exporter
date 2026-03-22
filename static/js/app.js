@@ -87,10 +87,20 @@ function clearActiveYear() {
 
 // ─── Tags laden ────────────────────────────────────────────────────────
 async function loadTags() {
+  const dbg = document.createElement("div");
+  dbg.id = "debug-banner";
+  dbg.style.cssText = "position:fixed;top:0;left:0;right:0;background:#ff0;color:#000;font-size:13px;padding:6px 12px;z-index:9999;font-family:monospace;";
+  dbg.textContent = "loadTags: gestartet…";
+  document.body.appendChild(dbg);
+
+  const setDbg = msg => { dbg.textContent = msg; };
+
   try {
-    // Zuerst Health-Check: ist der Token konfiguriert?
+    setDbg("loadTags: rufe /api/health auf…");
     const healthRes  = await fetch("/api/health");
     const healthData = await healthRes.json();
+    setDbg("health: " + JSON.stringify(healthData).slice(0, 120));
+
     if (!healthData.token_configured) {
       throw new Error(
         "PAPERLESS_TOKEN nicht gesetzt. " +
@@ -98,23 +108,29 @@ async function loadTags() {
       );
     }
 
+    setDbg("loadTags: rufe /api/tags auf…");
     const res = await fetch("/api/tags");
+    setDbg("tags status: " + res.status);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
     allTags = data.tags || [];
+    setDbg("tags geladen: " + allTags.length + " Tags → renderTags()");
     renderTags();
     $("tag-loading").classList.add("hidden");
     $("tag-list").classList.remove("hidden");
+    setDbg("✓ Tags OK – " + allTags.length + " Tags geladen");
+    setTimeout(() => dbg.remove(), 4000);
 
     $("start-btn").disabled = false;
     updateInfo();
   } catch (err) {
+    setDbg("FEHLER: " + err.message);
     $("tag-loading").classList.add("hidden");
     $("tag-error").textContent = `Fehler beim Laden der Tags: ${err.message}`;
     $("tag-error").classList.remove("hidden");
-    $("start-btn").disabled = false; // Trotzdem erlauben
+    $("start-btn").disabled = false;
   }
 }
 
