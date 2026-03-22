@@ -12,6 +12,16 @@ from pdf_export import download_pdfs
 
 app = Flask(__name__)
 
+# Cache-Busting: Static-Files bekommen einen Versions-Query-Parameter
+# basierend auf dem Build-Zeitpunkt – verhindert Browser-Cache-Probleme
+import time as _time
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # kein Browser-Caching
+_BUILD_VERSION = str(int(_time.time()))
+
+@app.context_processor
+def inject_version():
+    return {"ver": _BUILD_VERSION}
+
 PAPERLESS_URL   = os.environ.get("PAPERLESS_URL",   "http://192.168.178.115:8000")
 PAPERLESS_TOKEN = os.environ.get("PAPERLESS_TOKEN", "")
 OUTPUT_DIR      = os.environ.get("OUTPUT_DIR",      "/output")
