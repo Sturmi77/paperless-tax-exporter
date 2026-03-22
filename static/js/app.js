@@ -9,7 +9,8 @@ let polling      = null;
 
 // ─── Init ──────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-  $("footer-year").textContent = new Date().getFullYear();
+  const fy = $("footer-year");
+  if (fy) fy.textContent = new Date().getFullYear();
   buildYearButtons();
   loadTags();
   checkConnection();
