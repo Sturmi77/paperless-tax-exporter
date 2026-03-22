@@ -55,5 +55,4 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64    # amd64 für DS923+, arm64 für andere NAS
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true                         # Kein Cache – stellt sicher dass App-Dateien immer neu gebaut werden
