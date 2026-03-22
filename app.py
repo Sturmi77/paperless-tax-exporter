@@ -222,6 +222,28 @@ def api_config():
     })
 
 
+@app.route("/api/health")
+def api_health():
+    """Diagnose-Endpunkt: prüft ob Env-Vars gesetzt sind und Paperless erreichbar ist."""
+    token_set = bool(PAPERLESS_TOKEN)
+    status = {
+        "paperless_url": PAPERLESS_URL,
+        "token_configured": token_set,
+        "output_dir": OUTPUT_DIR,
+    }
+    if not token_set:
+        status["error"] = "PAPERLESS_TOKEN ist nicht gesetzt (leere Umgebungsvariable)."
+        return jsonify(status), 200  # 200 damit Frontend es lesen kann
+    try:
+        data = paperless_get("/api/tags/", params={"page_size": 1})
+        status["paperless_reachable"] = True
+        status["tags_count"] = data.get("count", "?")
+    except Exception as e:
+        status["paperless_reachable"] = False
+        status["error"] = str(e)
+    return jsonify(status)
+
+
 @app.route("/api/download-excel")
 def api_download_excel():
     with job_lock:

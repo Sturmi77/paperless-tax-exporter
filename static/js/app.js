@@ -25,12 +25,19 @@ document.addEventListener("DOMContentLoaded", () => {
 async function checkConnection() {
   const badge = $("connection-status");
   try {
-    const res = await fetch("/api/tags");
-    if (res.ok) {
+    const res  = await fetch("/api/health");
+    const data = await res.json();
+    if (!data.token_configured) {
+      badge.textContent = "Token nicht konfiguriert";
+      badge.className   = "badge badge-error";
+      badge.title       = "PAPERLESS_TOKEN Umgebungsvariable fehlt – bitte .env auf dem NAS anlegen";
+    } else if (data.paperless_reachable === false) {
+      badge.textContent = "Paperless nicht erreichbar";
+      badge.className   = "badge badge-error";
+      badge.title       = data.error || "";
+    } else {
       badge.textContent = "Paperless verbunden";
       badge.className   = "badge badge-ok";
-    } else {
-      throw new Error(res.status);
     }
   } catch {
     badge.textContent = "Paperless nicht erreichbar";
@@ -81,8 +88,18 @@ function clearActiveYear() {
 // ─── Tags laden ────────────────────────────────────────────────────────
 async function loadTags() {
   try {
+    // Zuerst Health-Check: ist der Token konfiguriert?
+    const healthRes  = await fetch("/api/health");
+    const healthData = await healthRes.json();
+    if (!healthData.token_configured) {
+      throw new Error(
+        "PAPERLESS_TOKEN nicht gesetzt. " +
+        "Bitte .env Datei auf dem NAS anlegen (siehe README)."
+      );
+    }
+
     const res = await fetch("/api/tags");
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
