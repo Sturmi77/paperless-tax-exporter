@@ -123,6 +123,14 @@
 
   </div>
 
+  <script>
+    window.onerror = function(msg, src, line) {
+      const b = document.createElement('div');
+      b.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#e53e3e;color:#fff;font-size:12px;padding:6px 12px;font-family:monospace;z-index:9999;';
+      b.textContent = 'JS-Fehler: ' + msg + ' (Zeile ' + line + ')';
+      document.body && document.body.appendChild(b);
+    };
+  </script>
   <script src="/static/js/app.js?v={{ ver }}"></script>
 </body>
 </html>
