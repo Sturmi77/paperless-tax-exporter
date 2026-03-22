@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop          # develop wird gebaut aber nicht als :latest getaggt
     tags:
       - "v*.*.*"
   workflow_dispatch:        # Manueller Trigger aus GitHub UI möglich
@@ -29,11 +30,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Bei Push auf main → :latest
+            # Bei Push auf main → :latest (stabile Version)
             type=raw,value=latest,enable={{is_default_branch}}
             # Bei Git-Tag v1.2.3 → :1.2.3 und :1.2 und :1
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # develop Branch → :develop (zum Testen, überschreibt nicht :latest)
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
             # Immer auch den Commit-SHA als Tag
             type=sha,prefix=sha-
 
