@@ -10,14 +10,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # App-Dateien (ARG vor COPY erzwingt Cache-Invalidierung bei jedem Build)
+# COPY . . kopiert alle Dateien – keine manuelle Liste noetig bei neuen Modulen
 ARG CACHEBUST=1
-COPY app.py excel_export.py pdf_export.py ./
-COPY templates/ templates/
-COPY static/ static/
+COPY . .
 
 # Ausgabe-Verzeichnis anlegen
 RUN mkdir -p /output
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "300", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "3600", "app:app"]

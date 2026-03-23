@@ -1,15 +1,18 @@
 services:
   paperless-tax-exporter:
-    image: ghcr.io/sturmi77/paperless-tax-exporter:latest
+    image: ghcr.io/sturmi77/paperless-tax-exporter:${IMAGE_TAG:-latest}
     container_name: paperless-tax-exporter
     restart: unless-stopped
-    pull_policy: always                 # Dockhand zieht beim Deploy immer das neueste Image
+    pull_policy: always
     ports:
       - "5055:5000"
     environment:
-      PAPERLESS_URL: ${PAPERLESS_URL}
-      PAPERLESS_TOKEN: ${PAPERLESS_TOKEN}
-      OUTPUT_DIR: /output
-      TZ: Europe/Vienna
+      PAPERLESS_URL:      ${PAPERLESS_URL}
+      PAPERLESS_TOKEN:    ${PAPERLESS_TOKEN}
+      OLLAMA_URL:         ${OLLAMA_URL:-http://192.168.178.115:11434}
+      OLLAMA_MODEL:       ${OLLAMA_MODEL:-qwen2.5:3b}
+      OUTPUT_DIR:         /output
+      WINDOWS_UNC_PATH:   ${WINDOWS_UNC_PATH:-\\SynologyDS923\downloads\steuerberater}
+      TZ:                 Europe/Vienna
     volumes:
       - /volume1/downloads/steuerberater:/output

@@ -9,7 +9,6 @@
 <body>
   <div class="app">
 
-    <!-- Header im komm|event CI -->
     <header class="header">
       <div class="header-inner">
         <div class="header-logo">
@@ -30,7 +29,6 @@
       <section class="card" id="config-card">
         <h2 class="card-title">Export konfigurieren</h2>
 
-        <!-- Hinweis Sicherheit -->
         <div class="info-box">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
@@ -79,14 +77,33 @@
           </div>
         </div>
 
-        <!-- Starten -->
-        <div class="actions">
-          <button class="btn btn-primary" id="start-btn" disabled>
+        <!-- Aktions-Buttons -->
+        <div class="actions actions-stacked">
+
+          <!-- Stufe 1 -->
+          <button class="btn btn-primary" id="btn-stage1" disabled>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
-            Export starten
+            Stufe 1: PDFs &amp; Excel
           </button>
+
+          <!-- Beide Stufen -->
+          <button class="btn btn-primary btn-both" id="btn-both" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            Stufe 1 + 2: PDFs, Excel &amp; OCR
+          </button>
+
+          <!-- Stufe 2 standalone -->
+          <button class="btn btn-secondary" id="btn-stage2" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            Stufe 2: OCR-Analyse (bestehende Dateien)
+          </button>
+
           <span class="selected-info" id="selected-info"></span>
         </div>
       </section>
@@ -94,10 +111,28 @@
       <!-- Job-Fortschritt -->
       <section class="card hidden" id="progress-card">
         <h2 class="card-title" id="progress-title">Export wird durchgeführt…</h2>
+
         <div class="progress-bar-wrap">
           <div class="progress-bar" id="progress-bar"></div>
         </div>
+
+        <!-- OCR-Fortschritt (nur Stufe 2) -->
+        <div id="ocr-progress" class="ocr-progress hidden">
+          <div class="ocr-progress-label">
+            <span id="ocr-counter">0 / 0</span>
+            <span id="ocr-doc-title" class="ocr-doc-title"></span>
+          </div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar progress-bar-ocr" id="progress-bar-ocr"></div>
+          </div>
+          <div class="ocr-timing" id="ocr-timing">
+            <span id="ocr-avg-time"></span>
+            <span id="ocr-eta"></span>
+          </div>
+        </div>
+
         <div class="log-box" id="log-box"></div>
+
         <div class="actions" id="download-area" style="display:none;">
           <a class="btn btn-success" href="/api/download-excel" download>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -118,7 +153,7 @@
     <footer class="footer">
       <a href="http://www.kommevent.at/" target="_blank">komm|event</a>
       · Agentur für Kommunikation &amp; Events
-      · Steuerberater Export v1.0 · <span id="footer-year"></span>
+      · Steuerberater Export v2.0 · <span id="footer-year"></span>
     </footer>
 
   </div>
