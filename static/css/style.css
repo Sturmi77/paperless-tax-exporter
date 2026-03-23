@@ -4,7 +4,7 @@
 :root {
   /* komm|event CI */
   --primary:      #2997ab;
-  --primary-hov:  #077589;
+  --primary-hov:  #1e7d8f;
   --primary-light:#c5d2d4;
   --primary-pale: #eef6f8;
   --dark:         #333333;
@@ -218,36 +218,6 @@ body {
   background: var(--surface-2);
   min-height: 52px;
 }
-.tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 13px;
-  border: 1.5px solid var(--tag-border);
-  border-radius: 16px;
-  background: var(--tag-bg);
-  color: var(--text);
-  font-size: .85rem;
-  cursor: pointer;
-  user-select: none;
-  transition: all .15s;
-}
-.tag-chip:hover {
-  border-color: var(--tag-active);
-  background: var(--tag-active-bg);
-}
-.tag-chip.selected {
-  background: var(--tag-active);
-  border-color: var(--tag-active);
-  color: #fff;
-  font-weight: 600;
-}
-.tag-chip .tag-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
 .tag-loading {
   color: var(--text-muted);
   font-size: .88rem;
@@ -397,6 +367,163 @@ body {
   color: var(--danger);
   font-size: .85rem;
   margin-top: 6px;
+}
+
+/* ─── Button-Untertitel ────────────────────────────────────────────── */
+.btn small {
+  display: block;
+  font-size: .75rem;
+  font-weight: 400;
+  opacity: .8;
+  margin-top: 1px;
+}
+
+/* ─── Pill-Toggle (Datumsfeld) ─────────────────────────────────────── */
+.date-filter-toggle {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.pill-btn {
+  padding: 4px 14px;
+  border-radius: 20px;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: .8rem;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: all .15s;
+}
+.pill-btn.pill-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+.pill-btn:hover:not(.pill-active) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ─── Chip-Dropdown ────────────────────────────────────────────────── */
+.tag-dropdown {
+  position: relative;
+}
+.tag-input-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-height: 38px;
+  padding: 5px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  cursor: text;
+  transition: border-color .15s;
+}
+.tag-input-wrap:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(41,151,171,.12);
+}
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 10px;
+  background: var(--primary-pale);
+  border: 1px solid var(--primary-light);
+  border-radius: 12px;
+  font-size: .8rem;
+  color: var(--primary-hov);
+  white-space: nowrap;
+}
+.tag-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: var(--primary-light);
+  color: var(--primary-hov);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+}
+.tag-chip-remove:hover {
+  background: var(--primary);
+  color: #fff;
+}
+.tag-search {
+  flex: 1;
+  min-width: 100px;
+  border: none;
+  outline: none;
+  font-size: .9rem;
+  font-family: var(--font);
+  color: var(--text);
+  background: transparent;
+  padding: 2px 0;
+}
+.tag-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0,0,0,.1);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.tag-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: .88rem;
+  color: var(--text);
+  transition: background .1s;
+}
+.tag-option:hover {
+  background: var(--surface-2);
+}
+.tag-option.selected {
+  background: var(--primary-pale);
+  color: var(--primary-hov);
+}
+.tag-option-check {
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid var(--border);
+  border-radius: 3px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .1s;
+}
+.tag-option.selected .tag-option-check {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.tag-no-results {
+  padding: 10px 12px;
+  font-size: .85rem;
+  color: var(--text-muted);
 }
 
 /* ─── Hilfsklassen ─────────────────────────────────────────────────── */

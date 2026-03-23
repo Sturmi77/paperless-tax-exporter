@@ -27,6 +27,14 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btn-stage2").addEventListener("click",  () => startExport("stage2"));
   $("btn-cancel").addEventListener("click",  cancelJob);
   $("new-export-btn").addEventListener("click", resetUI);
+
+  // Pill-Toggle für Datumsfeld
+  document.querySelectorAll('.pill-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.pill-btn').forEach(b => b.classList.remove('pill-active'));
+      btn.classList.add('pill-active');
+    });
+  });
 });
 
 // ─── Verbindungscheck ──────────────────────────────────────────────────
@@ -94,6 +102,11 @@ function clearActiveYear() {
   document.querySelectorAll(".year-btn").forEach(b => b.classList.remove("active"));
 }
 
+function getDateField() {
+  const active = document.querySelector('.pill-btn.pill-active');
+  return active ? active.dataset.value : 'created';
+}
+
 // ─── Tags laden ────────────────────────────────────────────────────────
 async function loadTags() {
   try {
@@ -109,8 +122,6 @@ async function loadTags() {
 
     allTags = data.tags || [];
     renderTags();
-    $("tag-loading").classList.add("hidden");
-    $("tag-list").classList.remove("hidden");
     enableButtons();
     updateInfo();
   } catch (err) {
@@ -136,40 +147,102 @@ function disableButtons() {
 }
 
 function renderTags() {
-  const container = $("tag-list");
-  container.innerHTML = "";
+  $('tag-loading').classList.add('hidden');
 
   if (allTags.length === 0) {
-    container.innerHTML = '<span style="color:#a0aec0;font-size:.88rem;">Keine Tags in Paperless gefunden.</span>';
+    $('tag-error').textContent = 'Keine Tags in Paperless gefunden.';
+    $('tag-error').classList.remove('hidden');
     return;
   }
 
-  const sorted = [...allTags].sort((a, b) => a.name.localeCompare(b.name, "de"));
-  const select = document.createElement("select");
-  select.id       = "tag-select";
-  select.multiple = true;
-  select.size     = Math.min(sorted.length, 8);
-  select.style.cssText = "width:100%;border:1.5px solid #c5d2d4;border-radius:6px;padding:4px;font-size:.93rem;font-family:inherit;background:#fff;color:#444;outline:none;";
+  const dropdown  = $('tag-dropdown');
+  const inputWrap = $('tag-input-wrap');
+  const chipsEl   = $('tag-chips');
+  const searchEl  = $('tag-search');
+  const panel     = $('tag-panel');
 
-  sorted.forEach(tag => {
-    const opt       = document.createElement("option");
-    opt.value       = tag.id;
-    opt.textContent = tag.name;
-    select.appendChild(opt);
-  });
+  dropdown.classList.remove('hidden');
 
-  select.addEventListener("change", () => {
-    selectedTags.clear();
-    Array.from(select.selectedOptions).forEach(o => selectedTags.add(Number(o.value)));
+  const sorted = [...allTags].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+
+  function renderPanel(filter = '') {
+    panel.innerHTML = '';
+    const f = filter.toLowerCase();
+    const visible = sorted.filter(t => t.name.toLowerCase().includes(f));
+    if (visible.length === 0) {
+      panel.innerHTML = '<div class="tag-no-results">Keine Tags gefunden.</div>';
+      return;
+    }
+    visible.forEach(tag => {
+      const opt = document.createElement('div');
+      opt.className = 'tag-option' + (selectedTags.has(tag.id) ? ' selected' : '');
+      opt.dataset.id = tag.id;
+      opt.innerHTML = `
+        <span class="tag-option-check">
+          ${selectedTags.has(tag.id) ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
+        </span>
+        ${tag.name}
+      `;
+      opt.addEventListener('click', () => toggleTag(tag.id, tag.name));
+      panel.appendChild(opt);
+    });
+  }
+
+  function renderChips() {
+    chipsEl.innerHTML = '';
+    selectedTags.forEach(id => {
+      const tag = allTags.find(t => t.id === id);
+      if (!tag) return;
+      const chip = document.createElement('div');
+      chip.className = 'tag-chip';
+      chip.innerHTML = `${tag.name}<button class="tag-chip-remove" data-id="${id}" title="Entfernen">×</button>`;
+      chip.querySelector('.tag-chip-remove').addEventListener('click', e => {
+        e.stopPropagation();
+        toggleTag(id, tag.name);
+      });
+      chipsEl.appendChild(chip);
+    });
+    if (selectedTags.size === 0) {
+      searchEl.placeholder = 'Tags wählen…';
+    } else {
+      searchEl.placeholder = '';
+    }
     updateInfo();
+  }
+
+  function toggleTag(id, name) {
+    if (selectedTags.has(id)) {
+      selectedTags.delete(id);
+    } else {
+      selectedTags.add(id);
+    }
+    renderChips();
+    renderPanel(searchEl.value);
+  }
+
+  function openPanel() {
+    renderPanel(searchEl.value);
+    panel.classList.remove('hidden');
+  }
+
+  function closePanel() {
+    panel.classList.add('hidden');
+    searchEl.value = '';
+  }
+
+  inputWrap.addEventListener('click', () => {
+    searchEl.focus();
+    openPanel();
   });
 
-  const hint = document.createElement("div");
-  hint.style.cssText = "font-size:.8rem;color:#718096;margin-top:4px;";
-  hint.textContent   = "Strg+Klick für Mehrfachauswahl · Keine Auswahl = alle Dokumente";
+  searchEl.addEventListener('input', () => renderPanel(searchEl.value));
+  searchEl.addEventListener('focus', () => openPanel());
 
-  container.appendChild(select);
-  container.appendChild(hint);
+  document.addEventListener('click', e => {
+    if (!dropdown.contains(e.target)) closePanel();
+  });
+
+  renderChips();
 }
 
 // ─── Info-Text ─────────────────────────────────────────────────────────
@@ -202,11 +275,6 @@ function formatDuration(seconds) {
   const h  = Math.floor(m / 60);
   const rm = m % 60;
   return rm > 0 ? `${h} Std. ${rm} Min.` : `${h} Std.`;
-}
-
-function getDateField() {
-  const el = document.querySelector("input[name='date-field']:checked");
-  return el ? el.value : "created";
 }
 
 // ─── Issue #4: Überschreib-Prüfung ────────────────────────────────────
@@ -260,7 +328,7 @@ async function startExport(mode) {
   const tagIds    = Array.from(selectedTags);
   const tagNames  = tagIds.map(id => { const t = allTags.find(t => t.id === id); return t ? t.name : String(id); });
   const yearLabel = from.slice(0, 4);
-  const dateField = getDateField();  // Issue #3
+  const dateField = getDateField();
 
   // Issue #4: Überschreib-Prüfung (false=Abbrechen, true=Überschreiben, "append"=Nur neue)
   const confirmed = await checkExistsAndConfirm(yearLabel, mode);
@@ -269,10 +337,10 @@ async function startExport(mode) {
   const appendMode = confirmed === "append";
 
   const titles = {
-    stage0:  "Excel wird erstellt…",
-    stage1:  appendMode ? "Neue Belege werden hinzugefügt…" : "Stufe 1: PDFs & Excel wird erstellt…",
-    stage2:  "Stufe 2: OCR-Analyse läuft…",
-    both:    appendMode ? "Neue Belege + OCR-Analyse läuft…" : "Stufe 1 + 2: Export & OCR-Analyse läuft…",
+    stage0:  "Nur Excel wird erstellt…",
+    stage1:  appendMode ? "Neue Belege werden hinzugefügt…" : "PDFs & Excel wird erstellt…",
+    stage2:  "OCR-Analyse läuft…",
+    both:    appendMode ? "Neue Belege + OCR-Analyse läuft…" : "Vollständiger Export läuft…",
   };
 
   $("config-card").classList.add("hidden");
@@ -298,10 +366,10 @@ async function startExport(mode) {
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({
         date_from: from, date_to: to,
+        date_field:  dateField,
         tag_ids: tagIds, tag_names: tagNames,
         year_label: yearLabel, mode,
-        date_field:  dateField,    // Issue #3
-        append_mode: appendMode,   // Issue #4
+        append_mode: appendMode,
       }),
     });
     if (!res.ok) {

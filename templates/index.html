@@ -29,6 +29,7 @@
       <section class="card" id="config-card">
         <h2 class="card-title">Export konfigurieren</h2>
 
+        <!-- 1. Info-Banner -->
         <div class="info-box">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
@@ -37,13 +38,13 @@
           <span>Paperless wird ausschließlich lesend verwendet. Exportierte Dateien werden im konfigurierten Ausgabepfad gespeichert.</span>
         </div>
 
-        <!-- Schnellauswahl Kalenderjahr -->
+        <!-- 2. Schnellauswahl Kalenderjahr -->
         <div class="field-group">
           <label class="field-label">Schnellauswahl Kalenderjahr</label>
           <div class="quick-years" id="quick-years"></div>
         </div>
 
-        <!-- Datumsbereich -->
+        <!-- 3. Datumsbereich + Pill-Toggle -->
         <div class="field-row">
           <div class="field-group">
             <label class="field-label" for="date-from">Von</label>
@@ -54,88 +55,82 @@
             <input class="input" type="date" id="date-to" />
           </div>
         </div>
-
-        <!-- Issue #3: Datumsfeld-Auswahl -->
-        <div class="field-group">
-          <label class="field-label">Datumsfeld
-            <span class="hint">Wonach soll gefiltert werden?</span>
-          </label>
-          <div class="radio-group">
-            <label class="radio-label">
-              <input type="radio" name="date-field" value="created" checked />
-              Belegdatum <span class="radio-hint">(Datum auf der Rechnung)</span>
-            </label>
-            <label class="radio-label">
-              <input type="radio" name="date-field" value="added" />
-              Scan-Datum <span class="radio-hint">(Import in Paperless)</span>
-            </label>
-          </div>
+        <div class="date-filter-toggle">
+          <button type="button" class="pill-btn pill-active" id="pill-created" data-value="created">
+            Belegdatum
+          </button>
+          <button type="button" class="pill-btn" id="pill-added" data-value="added">
+            Scan-Datum
+          </button>
         </div>
 
-        <!-- Tags -->
-        <div class="field-group">
+        <!-- 4. Tag-Auswahl (Chip-Dropdown) -->
+        <div class="field-group" style="margin-top: 20px;">
           <label class="field-label">
             Tags filtern
-            <span class="hint">Kein Tag gewählt = alle Dokumente im Zeitraum</span>
+            <span class="hint">Kein Tag = alle Dokumente im Zeitraum</span>
           </label>
           <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
-          <div id="tag-list" class="tag-list hidden"></div>
           <div id="tag-error" class="error-msg hidden"></div>
-        </div>
 
-        <!-- Ausgabepfad -->
-        <div class="field-group">
-          <label class="field-label">Ausgabepfad</label>
-          <div class="output-path">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span id="output-path-text">…</span>
+          <!-- Chip-Dropdown (initial hidden, wird durch JS befüllt) -->
+          <div class="tag-dropdown hidden" id="tag-dropdown">
+            <div class="tag-input-wrap" id="tag-input-wrap">
+              <div class="tag-chips" id="tag-chips">
+                <!-- gewählte Tags erscheinen hier als Chips -->
+              </div>
+              <input
+                type="text"
+                class="tag-search"
+                id="tag-search"
+                placeholder="Tags wählen…"
+                autocomplete="off"
+              />
+            </div>
+            <div class="tag-panel hidden" id="tag-panel">
+              <!-- Optionen werden per JS befüllt -->
+            </div>
           </div>
         </div>
 
-        <!-- Aktions-Buttons -->
+        <!-- 5. Aktions-Buttons -->
         <div class="actions actions-stacked">
 
-          <!-- Stufe 1 + 2 (Primär/Haupt-Aktion) -->
           <button class="btn btn-primary btn-both" id="btn-both" disabled>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
-            Stufe 1 + 2: PDFs, Excel &amp; OCR
+            <span>Vollständiger Export<small>PDFs · Excel · OCR-Analyse</small></span>
           </button>
 
-          <!-- Stufe 1 -->
           <button class="btn btn-primary" id="btn-stage1" disabled>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            Stufe 1: PDFs &amp; Excel
+            <span>PDFs &amp; Excel<small>Download + Aufstellung erstellen</small></span>
           </button>
 
-          <!-- Issue #1: Nur Excel -->
           <button class="btn btn-secondary" id="btn-stage0" disabled>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>
-              <line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/>
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
             </svg>
-            Nur Excel (ohne Download)
+            <span>Nur Excel<small>Ohne PDF-Download</small></span>
           </button>
 
-          <!-- Stufe 2 standalone -->
           <button class="btn btn-secondary" id="btn-stage2" disabled>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
-            Stufe 2: OCR-Analyse (bestehende Dateien)
+            <span>OCR-Analyse<small>Bestehende Dateien verwenden</small></span>
           </button>
 
           <span class="selected-info" id="selected-info"></span>
         </div>
 
-        <!-- Tipp: Nachtrag / Nur neue hinzufügen -->
+        <!-- 6. Tipp-Box -->
         <details class="tip-box" id="tip-nachtrag">
           <summary class="tip-summary">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -156,6 +151,16 @@
           </div>
         </details>
 
+        <!-- 7. Ausgabepfad (ans Ende) -->
+        <div class="field-group" style="margin-top: 12px;">
+          <label class="field-label">Ausgabepfad</label>
+          <div class="output-path">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span id="output-path-text">…</span>
+          </div>
+        </div>
       </section>
 
       <!-- Job-Fortschritt -->
