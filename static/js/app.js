@@ -1,4 +1,4 @@
-/* ─── Paperless Tax Exporter · Frontend v2.0 ────────────────────────── */
+/* ─── Paperless Tax Exporter · Frontend v2.1 ────────────────────────── */
 
 const $ = id => document.getElementById(id);
 
@@ -20,9 +20,11 @@ document.addEventListener("DOMContentLoaded", () => {
   $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); });
   $("date-to").addEventListener("change",   () => { clearActiveYear(); updateInfo(); });
 
+  $("btn-stage0").addEventListener("click",  () => startExport("stage0"));
   $("btn-stage1").addEventListener("click",  () => startExport("stage1"));
   $("btn-both").addEventListener("click",    () => startExport("both"));
   $("btn-stage2").addEventListener("click",  () => startExport("stage2"));
+  $("btn-cancel").addEventListener("click",  cancelJob);
   $("new-export-btn").addEventListener("click", resetUI);
 });
 
@@ -41,9 +43,7 @@ async function checkConnection() {
       badge.className   = "badge badge-error";
       badge.title       = data.error || "";
     } else {
-      const ollama = data.ollama_available
-        ? " · Ollama ✓"
-        : " · Ollama ✗";
+      const ollama = data.ollama_available ? " · Ollama ✓" : " · Ollama ✗";
       badge.textContent = "Paperless verbunden" + ollama;
       badge.className   = "badge badge-ok";
       badge.title       = data.ollama_status || "";
@@ -101,7 +101,6 @@ async function loadTags() {
     if (!healthData.token_configured) {
       throw new Error("PAPERLESS_TOKEN nicht gesetzt. Bitte .env auf dem NAS anlegen.");
     }
-
     const res  = await fetch("/api/tags");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -122,12 +121,14 @@ async function loadTags() {
 }
 
 function enableButtons() {
+  $("btn-stage0").disabled = false;
   $("btn-stage1").disabled = false;
   $("btn-both").disabled   = false;
   $("btn-stage2").disabled = false;
 }
 
 function disableButtons() {
+  $("btn-stage0").disabled = true;
   $("btn-stage1").disabled = true;
   $("btn-both").disabled   = true;
   $("btn-stage2").disabled = true;
@@ -143,7 +144,6 @@ function renderTags() {
   }
 
   const sorted = [...allTags].sort((a, b) => a.name.localeCompare(b.name, "de"));
-
   const select = document.createElement("select");
   select.id       = "tag-select";
   select.multiple = true;
@@ -198,9 +198,49 @@ function formatDuration(seconds) {
   const m = Math.floor(s / 60);
   const r = s % 60;
   if (m < 60) return r > 0 ? `${m} Min. ${r} Sek.` : `${m} Min.`;
-  const h = Math.floor(m / 60);
+  const h  = Math.floor(m / 60);
   const rm = m % 60;
   return rm > 0 ? `${h} Std. ${rm} Min.` : `${h} Std.`;
+}
+
+function getDateField() {
+  const el = document.querySelector("input[name='date-field']:checked");
+  return el ? el.value : "created";
+}
+
+// ─── Issue #4: Überschreib-Prüfung ────────────────────────────────────
+async function checkExistsAndConfirm(yearLabel, mode) {
+  // Nur bei Stufe 1 oder both relevant (nicht stage0, nicht stage2)
+  if (mode === "stage2" || mode === "stage0") return true;
+
+  let data;
+  try {
+    const res = await fetch(`/api/check-exists?year=${encodeURIComponent(yearLabel)}`);
+    data = await res.json();
+  } catch {
+    return true; // Bei Fehler einfach fortfahren
+  }
+
+  if (!data.excel_exists && !data.pdfs_exist) return true; // nichts vorhanden
+
+  // Modal befüllen und anzeigen
+  let details = "";
+  if (data.excel_exists) details += `<li>Excel-Datei: <strong>Rechnungsaufstellung_${yearLabel}.xlsx</strong></li>`;
+  if (data.pdfs_exist)   details += `<li>PDF-Ordner: <strong>Belege/</strong> (${data.pdf_count} Dateien)</li>`;
+
+  $("overwrite-details").innerHTML = details;
+  $("overwrite-modal").classList.remove("hidden");
+
+  return new Promise(resolve => {
+    $("btn-overwrite-confirm").onclick = () => {
+      $("overwrite-modal").classList.add("hidden");
+      resolve(true);
+    };
+    $("btn-overwrite-cancel").onclick = () => {
+      $("overwrite-modal").classList.add("hidden");
+      resolve(false);
+    };
+  });
 }
 
 // ─── Export starten ────────────────────────────────────────────────────
@@ -212,15 +252,17 @@ async function startExport(mode) {
     return;
   }
 
-  const tagIds   = Array.from(selectedTags);
-  const tagNames = tagIds.map(id => {
-    const t = allTags.find(t => t.id === id);
-    return t ? t.name : String(id);
-  });
+  const tagIds    = Array.from(selectedTags);
+  const tagNames  = tagIds.map(id => { const t = allTags.find(t => t.id === id); return t ? t.name : String(id); });
   const yearLabel = from.slice(0, 4);
+  const dateField = getDateField();  // Issue #3
 
-  // Titel je nach Modus
+  // Issue #4: Überschreib-Prüfung
+  const confirmed = await checkExistsAndConfirm(yearLabel, mode);
+  if (!confirmed) return;
+
   const titles = {
+    stage0: "Excel wird erstellt…",
     stage1: "Stufe 1: PDFs & Excel wird erstellt…",
     stage2: "Stufe 2: OCR-Analyse läuft…",
     both:   "Stufe 1 + 2: Export & OCR-Analyse läuft…",
@@ -230,13 +272,14 @@ async function startExport(mode) {
   $("progress-card").classList.remove("hidden");
   $("download-area").style.display = "none";
   $("ocr-progress").classList.add("hidden");
+  $("btn-cancel").classList.add("hidden");
 
   const titleEl = $("progress-title");
   if (titleEl) titleEl.textContent = titles[mode] || "Export läuft…";
 
   const bar = $("progress-bar");
-  bar.className  = "progress-bar indeterminate";
-  bar.style.width      = "";
+  bar.className     = "progress-bar indeterminate";
+  bar.style.width   = "";
   bar.style.background = "";
 
   $("log-box").innerHTML = "";
@@ -250,6 +293,7 @@ async function startExport(mode) {
         date_from: from, date_to: to,
         tag_ids: tagIds, tag_names: tagNames,
         year_label: yearLabel, mode,
+        date_field: dateField,   // Issue #3
       }),
     });
     if (!res.ok) {
@@ -267,13 +311,21 @@ async function startExport(mode) {
   polling = setInterval(pollStatus, 800);
 }
 
+// ─── Issue #2: Job abbrechen ───────────────────────────────────────────
+async function cancelJob() {
+  $("btn-cancel").disabled = true;
+  $("btn-cancel").textContent = "Abbrechen…";
+  try {
+    await fetch("/api/cancel", { method: "POST" });
+  } catch { /* ignore */ }
+}
+
 // ─── Status pollen ─────────────────────────────────────────────────────
 async function pollStatus() {
   try {
     const res  = await fetch("/api/status");
     const data = await res.json();
 
-    // Log-Zeilen
     const lines = data.log || [];
     for (let i = lastLogCount; i < lines.length; i++) {
       const line = lines[i];
@@ -289,16 +341,21 @@ async function pollStatus() {
     }
     lastLogCount = lines.length;
 
+    // Issue #2: Abbrechen-Button zeigen während OCR läuft
+    if (data.stage === "stage2" && !data.done) {
+      $("btn-cancel").classList.remove("hidden");
+    } else {
+      $("btn-cancel").classList.add("hidden");
+    }
+
     // OCR-Fortschritt (Stufe 2)
     if (data.stage === "stage2" && data.ocr_total > 0) {
       $("ocr-progress").classList.remove("hidden");
       $("ocr-counter").textContent  = `${data.ocr_current} / ${data.ocr_total} Dokumente`;
       $("ocr-doc-title").textContent = data.ocr_current_title || "";
-      const pct = Math.round((data.ocr_current / data.ocr_total) * 100);
-      const ocrBar = $("progress-bar-ocr");
-      ocrBar.style.width = pct + "%";
+      const pct    = Math.round((data.ocr_current / data.ocr_total) * 100);
+      $("progress-bar-ocr").style.width = pct + "%";
 
-      // Ø-Zeit + ETA
       if (data.avg_sec_per_doc !== null && data.avg_sec_per_doc !== undefined) {
         $("ocr-avg-time").textContent = `Ø ${formatDuration(data.avg_sec_per_doc)} / Dokument`;
       }
@@ -313,6 +370,7 @@ async function pollStatus() {
       clearInterval(polling);
       polling      = null;
       lastLogCount = 0;
+      $("btn-cancel").classList.add("hidden");
 
       const bar = $("progress-bar");
       bar.className = "progress-bar";
@@ -322,10 +380,10 @@ async function pollStatus() {
         bar.style.background = "#e53e3e";
       } else {
         bar.style.width      = "100%";
-        bar.style.background = "#2e7d32";
+        bar.style.background = data.cancelled ? "#e69800" : "#2e7d32";
         $("download-area").style.display = "flex";
         const ct = $("progress-title");
-        if (ct) ct.textContent = "Export abgeschlossen";
+        if (ct) ct.textContent = data.cancelled ? "Job abgebrochen" : "Export abgeschlossen";
       }
     }
   } catch { /* ignore */ }
@@ -357,6 +415,7 @@ function resetUI() {
   $("progress-bar").className        = "progress-bar";
   $("log-box").innerHTML             = "";
   $("ocr-progress").classList.add("hidden");
+  $("btn-cancel").classList.add("hidden");
   lastLogCount = 0;
   enableButtons();
 }
