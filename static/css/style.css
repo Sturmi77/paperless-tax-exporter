@@ -538,3 +538,51 @@ body {
 .log-line-warn {
   color: #b7791f;
 }
+
+/* ─── Tipp-Box (details/summary) ──────────────────────────────────── */
+.tip-box {
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+.tip-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  list-style: none;
+  user-select: none;
+}
+.tip-summary::-webkit-details-marker { display: none; }
+.tip-summary svg { flex-shrink: 0; color: var(--primary); }
+.tip-box[open] .tip-summary {
+  color: var(--primary-hov);
+  border-bottom: 1px solid var(--border);
+}
+.tip-content {
+  padding: 12px 16px 14px;
+  font-size: .85rem;
+  color: var(--text);
+  line-height: 1.6;
+}
+.tip-content p { margin: 0 0 8px; }
+.tip-content ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.tip-content li { margin-bottom: 3px; }
+.tip-result {
+  margin-top: 10px !important;
+  padding: 8px 11px;
+  background: var(--primary-pale);
+  border: 1px solid var(--primary-light);
+  border-radius: 4px;
+  color: var(--primary-hov);
+  font-size: .82rem !important;
+}
