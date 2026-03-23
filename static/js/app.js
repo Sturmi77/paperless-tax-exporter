@@ -232,6 +232,10 @@ async function checkExistsAndConfirm(yearLabel, mode) {
   $("overwrite-modal").classList.remove("hidden");
 
   return new Promise(resolve => {
+    $("btn-overwrite-append").onclick = () => {
+      $("overwrite-modal").classList.add("hidden");
+      resolve("append");
+    };
     $("btn-overwrite-confirm").onclick = () => {
       $("overwrite-modal").classList.add("hidden");
       resolve(true);
@@ -257,15 +261,17 @@ async function startExport(mode) {
   const yearLabel = from.slice(0, 4);
   const dateField = getDateField();  // Issue #3
 
-  // Issue #4: Überschreib-Prüfung
+  // Issue #4: Überschreib-Prüfung (false=Abbrechen, true=Überschreiben, "append"=Nur neue)
   const confirmed = await checkExistsAndConfirm(yearLabel, mode);
-  if (!confirmed) return;
+  if (confirmed === false) return;
+
+  const appendMode = confirmed === "append";
 
   const titles = {
-    stage0: "Excel wird erstellt…",
-    stage1: "Stufe 1: PDFs & Excel wird erstellt…",
-    stage2: "Stufe 2: OCR-Analyse läuft…",
-    both:   "Stufe 1 + 2: Export & OCR-Analyse läuft…",
+    stage0:  "Excel wird erstellt…",
+    stage1:  appendMode ? "Neue Belege werden hinzugefügt…" : "Stufe 1: PDFs & Excel wird erstellt…",
+    stage2:  "Stufe 2: OCR-Analyse läuft…",
+    both:    appendMode ? "Neue Belege + OCR-Analyse läuft…" : "Stufe 1 + 2: Export & OCR-Analyse läuft…",
   };
 
   $("config-card").classList.add("hidden");
@@ -293,7 +299,8 @@ async function startExport(mode) {
         date_from: from, date_to: to,
         tag_ids: tagIds, tag_names: tagNames,
         year_label: yearLabel, mode,
-        date_field: dateField,   // Issue #3
+        date_field:  dateField,    // Issue #3
+        append_mode: appendMode,   // Issue #4
       }),
     });
     if (!res.ok) {
@@ -347,20 +354,22 @@ async function pollStatus() {
     }
     lastLogCount = lines.length;
 
-    // Issue #2: Abbrechen-Button – an 'cancellable' koppeln (auch während Ladevorgang)
+    // Abbrechen-Button – nur DOM ändern wenn nötig (kein Flackern)
+    const cancelBtn = $("btn-cancel");
     if (data.cancellable) {
-      const btn = $("btn-cancel");
-      btn.classList.remove("hidden");
-      btn.disabled    = false;
-      btn.textContent = "";
-      // Icon + Text wiederherstellen falls vorher geändert
-      btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <circle cx="12" cy="12" r="10"/>
-        <line x1="15" y1="9" x2="9" y2="15"/>
-        <line x1="9" y1="9" x2="15" y2="15"/>
-      </svg> OCR abbrechen`;
+      if (cancelBtn.classList.contains("hidden")) {
+        // Erstmalig einblenden: Inhalt setzen und sichtbar machen
+        cancelBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="15" y1="9" x2="9" y2="15"/>
+          <line x1="9" y1="9" x2="15" y2="15"/>
+        </svg> OCR abbrechen`;
+        cancelBtn.disabled = false;
+        cancelBtn.classList.remove("hidden");
+      }
+      // Wenn bereits sichtbar: nichts ändern – verhindert Überschreiben von "Wird abgebrochen…"
     } else {
-      $("btn-cancel").classList.add("hidden");
+      cancelBtn.classList.add("hidden");
     }
 
     // OCR-Fortschritt (Stufe 2)

@@ -8,7 +8,8 @@ import time as _time
 from datetime import datetime, date
 from flask import Flask, render_template, request, jsonify, send_file
 
-from excel_export import create_excel, update_excel_with_ocr
+from excel_export import create_excel, update_excel_with_ocr, \
+                         append_to_excel, get_existing_doc_ids
 from pdf_export import download_pdfs
 from llm_extract import extract_from_ocr, check_ollama_available
 
@@ -220,11 +221,13 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
 
 
 # ── Stufe 1: Download + Excel ──────────────────────────────────────────
-def run_stage1(date_from, date_to, tag_ids, tag_names, year_label, date_field="created"):
+def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
+              date_field="created", append_mode=False):
     global job_status
     try:
         _job_status_reset("stage1")
-        _log(f"Stufe 1 gestartet: {date_from} bis {date_to}")
+        mode_label = "Nachtrag" if append_mode else "Stufe 1"
+        _log(f"{mode_label} gestartet: {date_from} bis {date_to}")
         if tag_names:
             _log(f"Tags: {', '.join(tag_names)}")
         _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
@@ -244,29 +247,56 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
                     "error": "Keine Dokumente im gewählten Zeitraum/Tag gefunden."})
             return
 
-        with job_lock:
-            job_status["doc_count"] = len(docs)
-
-        export_folder = os.path.join(OUTPUT_DIR, year_label)
-        pdf_folder    = os.path.join(export_folder, "Belege")
+        export_folder  = os.path.join(OUTPUT_DIR, year_label)
+        pdf_folder     = os.path.join(export_folder, "Belege")
+        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
+        excel_path     = os.path.join(export_folder, excel_filename)
         _assert_output_path(export_folder)
         _assert_output_path(pdf_folder)
         os.makedirs(pdf_folder, exist_ok=True)
         _log(f"Ausgabeordner: {export_folder}")
 
-        _log("Lade PDFs herunter…")
-        pdf_map = download_pdfs(docs, pdf_folder, PAPERLESS_URL, PAPERLESS_TOKEN, _log)
+        # Append-Modus: nur wirklich neue Dokumente verarbeiten
+        if append_mode and os.path.exists(excel_path):
+            existing_ids = get_existing_doc_ids(excel_path)
+            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden.")
+            new_docs = [
+                d for d in docs
+                if str(d.get("archive_serial_number") or d.get("id")) not in existing_ids
+            ]
+            _log(f"{len(new_docs)} neue Belege werden hinzugefügt.")
+            if not new_docs:
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                        "error": "Keine neuen Dokumente gefunden – alle bereits im Excel vorhanden."})
+                return
+            docs_to_process = new_docs
+        else:
+            docs_to_process = docs
 
-        _log("Erstelle Excel-Datei…")
-        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
-        excel_path     = os.path.join(export_folder, excel_filename)
-        create_excel(docs, pdf_map, excel_path, year_label, unc_base=WINDOWS_UNC_PATH)
-        _log(f"Excel gespeichert: {excel_filename}")
+        with job_lock:
+            job_status["doc_count"] = len(docs_to_process)
+
+        _log(f"Lade {len(docs_to_process)} PDFs herunter…")
+        pdf_map = download_pdfs(docs_to_process, pdf_folder, PAPERLESS_URL, PAPERLESS_TOKEN, _log)
+
+        if append_mode and os.path.exists(excel_path):
+            _log("Hänge neue Zeilen ans Excel an…")
+            added = append_to_excel(docs_to_process, pdf_map, excel_path, year_label,
+                                    unc_base=WINDOWS_UNC_PATH)
+            _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt.")
+        else:
+            _log("Erstelle Excel-Datei…")
+            create_excel(docs_to_process, pdf_map, excel_path, year_label,
+                         unc_base=WINDOWS_UNC_PATH)
+            _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
             job_status.update({
                 "done": True, "running": False, "excel_path": excel_path,
-                "log": job_status["log"] + [f"✓ Stufe 1 abgeschlossen. {len(docs)} Belege exportiert."],
+                "log": job_status["log"] + [
+                    f"✓ {mode_label} abgeschlossen. {len(docs_to_process)} Belege exportiert."
+                ],
             })
 
     except Exception as e:
@@ -468,6 +498,7 @@ def api_start():
     year_label  = data.get("year_label", date_from[:4] if date_from else "export")
     mode        = data.get("mode", "stage1")   # "stage0"|"stage1"|"stage2"|"both"
     date_field  = data.get("date_field", "created")  # Issue #3
+    append_mode = data.get("append_mode", False)      # Issue #4: nur neue hinzufügen
 
     if not date_from or not date_to:
         return jsonify({"error": "Bitte Datumsbereich angeben."}), 400
@@ -499,7 +530,8 @@ def api_start():
         )
     elif mode == "both":
         def run_both():
-            run_stage1(date_from, date_to, tag_ids, tag_names, year_label, date_field)
+            run_stage1(date_from, date_to, tag_ids, tag_names, year_label, date_field,
+                       append_mode=append_mode)
             with job_lock:
                 ep  = job_status.get("excel_path")
                 err = job_status.get("error")
@@ -513,6 +545,7 @@ def api_start():
         thread = threading.Thread(
             target=run_stage1,
             args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
+            kwargs={"append_mode": append_mode},
             daemon=True,
         )
 
