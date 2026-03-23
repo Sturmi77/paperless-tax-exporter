@@ -4,7 +4,8 @@ const $ = id => document.getElementById(id);
 
 let allTags      = [];
 let selectedTags = new Set();
-let polling      = null;
+let pollTimer    = null;   // setTimeout-Handle (ersetzt setInterval)
+let pollRunning  = false;  // true solange ein fetch läuft → keine Parallelinstanz
 let lastLogCount = 0;
 
 // ─── Init ──────────────────────────────────────────────────────────────
@@ -315,26 +316,30 @@ async function startExport(mode) {
     return;
   }
 
-  polling = setInterval(pollStatus, 800);
+  // setTimeout-Loop starten (kein setInterval → keine parallelen Instanzen)
+  schedulePoll();
 }
 
-// ─── Issue #2: Job abbrechen ───────────────────────────────────────────
-async function cancelJob() {
-  const btn = $("btn-cancel");
-  btn.disabled  = true;
-  btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-    <circle cx="12" cy="12" r="10"/>
-    <line x1="15" y1="9" x2="9" y2="15"/>
-    <line x1="9" y1="9" x2="15" y2="15"/>
-  </svg> Wird abgebrochen…`;
-  try {
-    await fetch("/api/cancel", { method: "POST" });
-  } catch { /* ignore */ }
-  // Button bleibt disabled – pollStatus() versteckt ihn sobald cancellable=false
+// ─── Poll-Loop (setTimeout statt setInterval) ──────────────────────────
+// Garantiert: nächster Poll startet erst NACH Abschluss des aktuellen fetch.
+// Damit kann es keine zwei gleichzeitig laufenden pollStatus()-Instanzen geben,
+// die den Button-Zustand wechselseitig überschreiben (Blink-Ursache).
+function schedulePoll() {
+  pollTimer = setTimeout(pollStatus, 800);
 }
 
-// ─── Status pollen ─────────────────────────────────────────────────────
+function stopPoll() {
+  if (pollTimer !== null) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  pollRunning = false;
+}
+
 async function pollStatus() {
+  pollTimer   = null;
+  pollRunning = true;
+
   try {
     const res  = await fetch("/api/status");
     const data = await res.json();
@@ -354,20 +359,22 @@ async function pollStatus() {
     }
     lastLogCount = lines.length;
 
-    // Abbrechen-Button – nur DOM ändern wenn nötig (kein Flackern)
+    // Abbrechen-Button:
+    // - Nur beim ersten Einblenden (hidden→sichtbar) wird der Inhalt gesetzt.
+    // - Wenn bereits sichtbar: DOM NICHT anfassen → "Wird abgebrochen…" bleibt.
+    // - pollRunning=true schützt auch vor Race Conditions durch setInterval.
     const cancelBtn = $("btn-cancel");
     if (data.cancellable) {
       if (cancelBtn.classList.contains("hidden")) {
-        // Erstmalig einblenden: Inhalt setzen und sichtbar machen
+        cancelBtn.disabled  = false;
         cancelBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <circle cx="12" cy="12" r="10"/>
           <line x1="15" y1="9" x2="9" y2="15"/>
           <line x1="9" y1="9" x2="15" y2="15"/>
         </svg> OCR abbrechen`;
-        cancelBtn.disabled = false;
         cancelBtn.classList.remove("hidden");
       }
-      // Wenn bereits sichtbar: nichts ändern – verhindert Überschreiben von "Wird abgebrochen…"
+      // bereits sichtbar → nichts tun
     } else {
       cancelBtn.classList.add("hidden");
     }
@@ -377,7 +384,7 @@ async function pollStatus() {
       $("ocr-progress").classList.remove("hidden");
       $("ocr-counter").textContent  = `${data.ocr_current} / ${data.ocr_total} Dokumente`;
       $("ocr-doc-title").textContent = data.ocr_current_title || "";
-      const pct    = Math.round((data.ocr_current / data.ocr_total) * 100);
+      const pct = Math.round((data.ocr_current / data.ocr_total) * 100);
       $("progress-bar-ocr").style.width = pct + "%";
 
       if (data.avg_sec_per_doc !== null && data.avg_sec_per_doc !== undefined) {
@@ -391,8 +398,7 @@ async function pollStatus() {
     }
 
     if (data.done) {
-      clearInterval(polling);
-      polling      = null;
+      stopPoll();
       lastLogCount = 0;
       $("btn-cancel").classList.add("hidden");
 
@@ -409,8 +415,27 @@ async function pollStatus() {
         const ct = $("progress-title");
         if (ct) ct.textContent = data.cancelled ? "Job abgebrochen" : "Export abgeschlossen";
       }
+      return; // kein schedulePoll() mehr
     }
   } catch { /* ignore */ }
+
+  pollRunning = false;
+  schedulePoll(); // nächsten Tick erst hier einplanen → nie parallel
+}
+
+// ─── Issue #2: Job abbrechen ───────────────────────────────────────────
+async function cancelJob() {
+  const btn = $("btn-cancel");
+  btn.disabled  = true;
+  btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+    <circle cx="12" cy="12" r="10"/>
+    <line x1="15" y1="9" x2="9" y2="15"/>
+    <line x1="9" y1="9" x2="15" y2="15"/>
+  </svg> Wird abgebrochen…`;
+  try {
+    await fetch("/api/cancel", { method: "POST" });
+  } catch { /* ignore */ }
+  // Button bleibt disabled – pollStatus() versteckt ihn wenn cancellable=false
 }
 
 function logLine(text, type = "") {
@@ -426,12 +451,14 @@ function logLine(text, type = "") {
 
 // ─── Reset ─────────────────────────────────────────────────────────────
 function resetToConfig() {
+  stopPoll();
   $("progress-card").classList.add("hidden");
   $("config-card").classList.remove("hidden");
   enableButtons();
 }
 
 function resetUI() {
+  stopPoll();
   $("progress-card").classList.add("hidden");
   $("config-card").classList.remove("hidden");
   $("progress-bar").style.width      = "0%";
