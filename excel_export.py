@@ -24,14 +24,16 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
-# Farben
-COLOR_HEADER_BG   = "1F497D"   # Dunkelblau für Header
+# Farben – komm|event CI
+COLOR_HEADER_BG   = "2997AB"   # Teal (komm|event Primärfarbe)
 COLOR_HEADER_FONT = "FFFFFF"   # Weiß
-COLOR_SUM_BG      = "DCE6F1"   # Hellblau für Summenzeile
-COLOR_OCR_BG      = "FFFFC7"   # Gelb für OCR-Vorschlagswerte
+COLOR_SUM_BG      = "D6EEF2"   # Teal-hell (abgeleitet)
+COLOR_SUM_FONT    = "1A6478"   # Teal-dunkel für SUMME-Beschriftung
+COLOR_OCR_BG      = "FFFFC7"   # Gelb für OCR-Vorschlagswerte (funktional, bleibt)
 COLOR_EMPTY_BG    = "F2F2F2"   # Hellgrau für manuell zu füllende Felder
+COLOR_HYPERLINK   = "1E7D8F"   # Teal-dunkel für Hyperlinks
 
-THIN   = Side(style="thin", color="BFBFBF")
+THIN   = Side(style="thin", color="C5D2D4")  # CI-Border
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 COLUMNS = [
@@ -113,10 +115,12 @@ def create_excel(documents, pdf_map, output_path, year_label,
     ws.title = "Rechnungsaufstellung"
 
     # ── Zeile 1: SUMME-Zeile ──────────────────────────────────────────────
-    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[1].height = 22
     sum_label = ws.cell(row=1, column=1, value=f"SUMME {year_label}")
-    sum_label.font      = Font(bold=True, size=11)
+    sum_label.font      = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+    sum_label.fill      = PatternFill("solid", fgColor=COLOR_SUM_BG)
     sum_label.alignment = Alignment(horizontal="left", vertical="center")
+    sum_label.border    = BORDER
 
     # ── Zeilen 2–3: leer ─────────────────────────────────────────────────
     ws.row_dimensions[2].height = 8
@@ -209,7 +213,7 @@ def create_excel(documents, pdf_map, output_path, year_label,
                 row=row, column=10,
                 value=f'=HYPERLINK("{unc_path}","{filename}")'
             )
-            cell_j.font      = Font(size=10, color="0563C1", underline="single")
+            cell_j.font      = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment = Alignment(horizontal="left", vertical="center")
             cell_j.border    = BORDER
         else:
@@ -230,8 +234,10 @@ def create_excel(documents, pdf_map, output_path, year_label,
     # Summenformel (Spalte H = Rechnungssumme)
     ws["H1"] = f"=SUM(H{data_start_row}:H{last_data_row})"
     ws["H1"].number_format = NUMBER_FORMAT
-    ws["H1"].font          = Font(bold=True, size=11)
+    ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+    ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
     ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
+    ws["H1"].border        = BORDER
 
     ws.freeze_panes = "A5"
     ws.print_area   = f"A1:{get_column_letter(len(COLUMNS))}{last_data_row}"
@@ -316,7 +322,7 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label):
         if filename and unc_base and not str(filename).startswith("=HYPERLINK"):
             unc_path = _build_unc_path(unc_base, year_label, filename)
             cell_j.value      = f'=HYPERLINK("{unc_path}","{filename}")'
-            cell_j.font       = Font(size=10, color="0563C1", underline="single")
+            cell_j.font       = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment  = Alignment(horizontal="left", vertical="center")
             cell_j.border     = BORDER
 
@@ -429,7 +435,7 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label, unc_base=Non
                 row=row, column=10,
                 value=f'=HYPERLINK("{unc_path}","{filename}")'
             )
-            cell_j.font      = Font(size=10, color="0563C1", underline="single")
+            cell_j.font      = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment = Alignment(horizontal="left", vertical="center")
             cell_j.border    = BORDER
         else:
@@ -439,8 +445,10 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label, unc_base=Non
     new_last_row = insert_start + len(sorted_new) - 1
     ws["H1"] = f"=SUM(H5:H{new_last_row})"
     ws["H1"].number_format = NUMBER_FORMAT
-    ws["H1"].font          = Font(bold=True, size=11)
+    ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+    ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
     ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
+    ws["H1"].border        = BORDER
 
     # Tabellen-Referenz ausweiten
     for tbl in ws.tables.values():
