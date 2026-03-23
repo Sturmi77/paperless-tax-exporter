@@ -25,7 +25,7 @@ def inject_version():
 
 PAPERLESS_URL    = os.environ.get("PAPERLESS_URL",    "http://192.168.178.115:8000")
 PAPERLESS_TOKEN  = os.environ.get("PAPERLESS_TOKEN",  "")
-OUTPUT_DIR       = os.environ.get("OUTPUT_DIR",       "/output")
+OUTPUT_DIR       = os.path.realpath(os.environ.get("OUTPUT_DIR", "/output"))
 OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://192.168.178.115:11434")
 OLLAMA_MODEL     = os.environ.get("OLLAMA_MODEL",     "qwen2.5:3b")
 WINDOWS_UNC_PATH = os.environ.get("WINDOWS_UNC_PATH", r"\\SynologyDS923\downloads\steuerberater")
@@ -538,6 +538,7 @@ def api_start():
             if ep and not err:
                 with job_lock:
                     job_status.update({"running": True, "done": False})
+                cancel_event.clear()  # Sicherstellen dass kein alter Abbruch-State hängt
                 run_stage2(ep, year_label, None, date_from, date_to, tag_ids, date_field)
         thread = threading.Thread(target=run_both, daemon=True)
     else:
