@@ -1,6 +1,6 @@
 services:
   paperless-tax-exporter:
-    image: ghcr.io/sturmi77/paperless-tax-exporter:latest
+    image: ghcr.io/sturmi77/paperless-tax-exporter:${IMAGE_TAG:-latest}
     container_name: paperless-tax-exporter
     restart: unless-stopped
     pull_policy: always
