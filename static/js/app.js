@@ -1,16 +1,17 @@
-/* ─── Paperless Tax Exporter · Frontend ─────────────────────────────── */
+/* ─── Paperless Tax Exporter · Frontend v2.0 ────────────────────────── */
 
 const $ = id => document.getElementById(id);
 
-// State
 let allTags      = [];
 let selectedTags = new Set();
 let polling      = null;
+let lastLogCount = 0;
 
 // ─── Init ──────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   const fy = $("footer-year");
   if (fy) fy.textContent = new Date().getFullYear();
+
   buildYearButtons();
   loadTags();
   checkConnection();
@@ -18,7 +19,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); });
   $("date-to").addEventListener("change",   () => { clearActiveYear(); updateInfo(); });
-  $("start-btn").addEventListener("click",  startExport);
+
+  $("btn-stage1").addEventListener("click",  () => startExport("stage1"));
+  $("btn-both").addEventListener("click",    () => startExport("both"));
+  $("btn-stage2").addEventListener("click",  () => startExport("stage2"));
   $("new-export-btn").addEventListener("click", resetUI);
 });
 
@@ -31,22 +35,26 @@ async function checkConnection() {
     if (!data.token_configured) {
       badge.textContent = "Token nicht konfiguriert";
       badge.className   = "badge badge-error";
-      badge.title       = "PAPERLESS_TOKEN Umgebungsvariable fehlt – bitte .env auf dem NAS anlegen";
+      badge.title       = "PAPERLESS_TOKEN fehlt – bitte .env auf dem NAS anlegen";
     } else if (data.paperless_reachable === false) {
       badge.textContent = "Paperless nicht erreichbar";
       badge.className   = "badge badge-error";
       badge.title       = data.error || "";
     } else {
-      badge.textContent = "Paperless verbunden";
+      const ollama = data.ollama_available
+        ? " · Ollama ✓"
+        : " · Ollama ✗";
+      badge.textContent = "Paperless verbunden" + ollama;
       badge.className   = "badge badge-ok";
+      badge.title       = data.ollama_status || "";
     }
   } catch {
-    badge.textContent = "Paperless nicht erreichbar";
+    badge.textContent = "Verbindungsfehler";
     badge.className   = "badge badge-error";
   }
 }
 
-// ─── Output-Pfad anzeigen ──────────────────────────────────────────────────
+// ─── Output-Pfad ──────────────────────────────────────────────────────
 async function updateOutputPath() {
   try {
     const res  = await fetch("/api/config");
@@ -63,11 +71,10 @@ async function updateOutputPath() {
 function buildYearButtons() {
   const container = $("quick-years");
   const thisYear  = new Date().getFullYear();
-  // Aktuelle + 3 Vorjahre
   for (let y = thisYear; y >= thisYear - 3; y--) {
     const btn = document.createElement("button");
-    btn.className   = "year-btn";
-    btn.textContent = y;
+    btn.className    = "year-btn";
+    btn.textContent  = y;
     btn.dataset.year = y;
     btn.addEventListener("click", () => selectYear(y, btn));
     container.appendChild(btn);
@@ -91,7 +98,6 @@ async function loadTags() {
   try {
     const healthRes  = await fetch("/api/health");
     const healthData = await healthRes.json();
-
     if (!healthData.token_configured) {
       throw new Error("PAPERLESS_TOKEN nicht gesetzt. Bitte .env auf dem NAS anlegen.");
     }
@@ -105,14 +111,26 @@ async function loadTags() {
     renderTags();
     $("tag-loading").classList.add("hidden");
     $("tag-list").classList.remove("hidden");
-    $("start-btn").disabled = false;
+    enableButtons();
     updateInfo();
   } catch (err) {
     $("tag-loading").classList.add("hidden");
     $("tag-error").textContent = `Fehler beim Laden der Tags: ${err.message}`;
     $("tag-error").classList.remove("hidden");
-    $("start-btn").disabled = false;
+    enableButtons();
   }
+}
+
+function enableButtons() {
+  $("btn-stage1").disabled = false;
+  $("btn-both").disabled   = false;
+  $("btn-stage2").disabled = false;
+}
+
+function disableButtons() {
+  $("btn-stage1").disabled = true;
+  $("btn-both").disabled   = true;
+  $("btn-stage2").disabled = true;
 }
 
 function renderTags() {
@@ -127,13 +145,13 @@ function renderTags() {
   const sorted = [...allTags].sort((a, b) => a.name.localeCompare(b.name, "de"));
 
   const select = document.createElement("select");
-  select.id      = "tag-select";
+  select.id       = "tag-select";
   select.multiple = true;
-  select.size    = Math.min(sorted.length, 8);
+  select.size     = Math.min(sorted.length, 8);
   select.style.cssText = "width:100%;border:1.5px solid #c5d2d4;border-radius:6px;padding:4px;font-size:.93rem;font-family:inherit;background:#fff;color:#444;outline:none;";
 
   sorted.forEach(tag => {
-    const opt = document.createElement("option");
+    const opt       = document.createElement("option");
     opt.value       = tag.id;
     opt.textContent = tag.name;
     select.appendChild(opt);
@@ -158,7 +176,6 @@ function updateInfo() {
   const from = $("date-from").value;
   const to   = $("date-to").value;
   const info = $("selected-info");
-
   if (!from || !to) {
     info.textContent = "Bitte Datumsbereich wählen.";
     return;
@@ -176,7 +193,7 @@ function formatDate(iso) {
 }
 
 // ─── Export starten ────────────────────────────────────────────────────
-async function startExport() {
+async function startExport(mode) {
   const from = $("date-from").value;
   const to   = $("date-to").value;
   if (!from || !to) {
@@ -191,45 +208,61 @@ async function startExport() {
   });
   const yearLabel = from.slice(0, 4);
 
+  // Titel je nach Modus
+  const titles = {
+    stage1: "Stufe 1: PDFs & Excel wird erstellt…",
+    stage2: "Stufe 2: OCR-Analyse läuft…",
+    both:   "Stufe 1 + 2: Export & OCR-Analyse läuft…",
+  };
+
   $("config-card").classList.add("hidden");
   $("progress-card").classList.remove("hidden");
   $("download-area").style.display = "none";
+  $("ocr-progress").classList.add("hidden");
+
+  const titleEl = $("progress-title");
+  if (titleEl) titleEl.textContent = titles[mode] || "Export läuft…";
 
   const bar = $("progress-bar");
-  bar.className = "progress-bar indeterminate";
+  bar.className  = "progress-bar indeterminate";
+  bar.style.width      = "";
+  bar.style.background = "";
 
-  const logBox = $("log-box");
-  logBox.innerHTML = "";
+  $("log-box").innerHTML = "";
+  lastLogCount = 0;
 
   try {
     const res = await fetch("/api/start", {
-      method: "POST",
+      method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date_from: from, date_to: to, tag_ids: tagIds, tag_names: tagNames, year_label: yearLabel }),
+      body:    JSON.stringify({
+        date_from: from, date_to: to,
+        tag_ids: tagIds, tag_names: tagNames,
+        year_label: yearLabel, mode,
+      }),
     });
     if (!res.ok) {
       const err = await res.json();
       logLine(`Fehler: ${err.error}`, "error");
+      resetToConfig();
       return;
     }
   } catch (err) {
     logLine(`Verbindungsfehler: ${err.message}`, "error");
+    resetToConfig();
     return;
   }
 
-  // Polling starten
   polling = setInterval(pollStatus, 800);
 }
 
 // ─── Status pollen ─────────────────────────────────────────────────────
-let lastLogCount = 0;
-
 async function pollStatus() {
   try {
     const res  = await fetch("/api/status");
     const data = await res.json();
 
-    // Neue Log-Zeilen
+    // Log-Zeilen
     const lines = data.log || [];
     for (let i = lastLogCount; i < lines.length; i++) {
       const line = lines[i];
@@ -237,31 +270,44 @@ async function pollStatus() {
         logLine(line, "error");
       } else if (line.startsWith("✓")) {
         logLine(line, "done");
+      } else if (line.startsWith("⚠")) {
+        logLine(line, "warn");
       } else {
         logLine(line);
       }
     }
     lastLogCount = lines.length;
 
+    // OCR-Fortschritt (Stufe 2)
+    if (data.stage === "stage2" && data.ocr_total > 0) {
+      $("ocr-progress").classList.remove("hidden");
+      $("ocr-counter").textContent  = `${data.ocr_current} / ${data.ocr_total} Dokumente`;
+      $("ocr-doc-title").textContent = data.ocr_current_title || "";
+      const pct = Math.round((data.ocr_current / data.ocr_total) * 100);
+      const ocrBar = $("progress-bar-ocr");
+      ocrBar.style.width = pct + "%";
+    }
+
     if (data.done) {
       clearInterval(polling);
-      polling = null;
+      polling      = null;
       lastLogCount = 0;
 
       const bar = $("progress-bar");
       bar.className = "progress-bar";
 
       if (data.error) {
-        bar.style.width = "100%";
+        bar.style.width      = "100%";
         bar.style.background = "#e53e3e";
       } else {
-        bar.style.width = "100%";
+        bar.style.width      = "100%";
         bar.style.background = "#2e7d32";
         $("download-area").style.display = "flex";
-        const ct = $("progress-card").querySelector(".card-title"); if (ct) ct.textContent = "Export abgeschlossen";
+        const ct = $("progress-title");
+        if (ct) ct.textContent = "Export abgeschlossen";
       }
     }
-  } catch { /* ignore polling errors */ }
+  } catch { /* ignore */ }
 }
 
 function logLine(text, type = "") {
@@ -270,17 +316,26 @@ function logLine(text, type = "") {
   line.textContent = text;
   if (type === "error") line.classList.add("log-line-error");
   if (type === "done")  line.classList.add("log-line-done");
+  if (type === "warn")  line.classList.add("log-line-warn");
   logBox.appendChild(line);
   logBox.scrollTop = logBox.scrollHeight;
 }
 
 // ─── Reset ─────────────────────────────────────────────────────────────
+function resetToConfig() {
+  $("progress-card").classList.add("hidden");
+  $("config-card").classList.remove("hidden");
+  enableButtons();
+}
+
 function resetUI() {
   $("progress-card").classList.add("hidden");
   $("config-card").classList.remove("hidden");
-  $("progress-bar").style.width = "0%";
+  $("progress-bar").style.width      = "0%";
   $("progress-bar").style.background = "var(--primary)";
-  $("progress-bar").className = "progress-bar";
-  $("log-box").innerHTML = "";
+  $("progress-bar").className        = "progress-bar";
+  $("log-box").innerHTML             = "";
+  $("ocr-progress").classList.add("hidden");
   lastLogCount = 0;
+  enableButtons();
 }
