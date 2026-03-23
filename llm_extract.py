@@ -47,7 +47,7 @@ def _extract_relevant_text(content: str, max_chars: int = 1000) -> str:
     return text[:max_chars]
 
 
-def extract_from_ocr(content: str, timeout: int = 180) -> dict:
+def extract_from_ocr(content: str, timeout: int = 600) -> dict:
     """
     Sendet OCR-Text an Ollama und gibt dict zurück:
     {
