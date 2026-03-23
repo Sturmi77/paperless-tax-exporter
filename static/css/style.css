@@ -452,6 +452,23 @@ body {
   border-radius: 3px;
   transition: width 0.4s ease;
 }
+.ocr-timing {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  font-size: .8rem;
+  color: var(--text-muted);
+  min-height: 1.2em;
+}
+#ocr-avg-time {
+  font-variant-numeric: tabular-nums;
+}
+#ocr-eta {
+  font-weight: 600;
+  color: var(--primary-hov);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ─── Log-Zeilen ───────────────────────────────────────────────────── */
 .log-line-warn {

@@ -56,6 +56,8 @@ job_status = {
     "ocr_current": 0,      # aktuelles Dokument Stufe 2
     "ocr_total":   0,      # Gesamtanzahl Stufe 2
     "ocr_current_title": "",
+    "ocr_start_time":    None,  # Zeitstempel Start Stufe 2
+    "ocr_last_doc_time": None,  # Zeitstempel nach letztem Dokument
 }
 job_lock = threading.Lock()
 
@@ -224,6 +226,8 @@ def run_stage2(excel_path, year_label, docs=None,
                 "log": [], "done": False, "error": None,
                 "stage": "stage2", "ocr_current": 0, "ocr_total": 0,
                 "ocr_current_title": "",
+                "ocr_start_time":    None,
+                "ocr_last_doc_time": None,
             })
 
         def log(msg):
@@ -247,7 +251,8 @@ def run_stage2(excel_path, year_label, docs=None,
             log(f"{len(docs)} Dokumente geladen.")
 
         with job_lock:
-            job_status["ocr_total"] = len(docs)
+            job_status["ocr_total"]      = len(docs)
+            job_status["ocr_start_time"] = _time.monotonic()
 
         log(f"Starte OCR-Analyse für {len(docs)} Dokumente…")
         ocr_results = {}
@@ -259,6 +264,7 @@ def run_stage2(excel_path, year_label, docs=None,
             with job_lock:
                 job_status["ocr_current"]       = idx
                 job_status["ocr_current_title"] = title
+                job_status["ocr_last_doc_time"] = _time.monotonic()
 
             log(f"[{idx}/{len(docs)}] Analysiere: {title}")
 
@@ -323,7 +329,30 @@ def api_tags():
 @app.route("/api/status")
 def api_status():
     with job_lock:
-        return jsonify(dict(job_status))
+        s = dict(job_status)
+
+    # Durchschnitt + ETA berechnen (nur während Stufe 2 aktiv)
+    avg = None
+    eta = None
+    if (
+        s.get("stage") == "stage2"
+        and s.get("ocr_start_time") is not None
+        and s.get("ocr_current", 0) > 0
+        and s.get("ocr_total", 0) > 0
+    ):
+        elapsed  = (s["ocr_last_doc_time"] or _time.monotonic()) - s["ocr_start_time"]
+        done     = s["ocr_current"]
+        total    = s["ocr_total"]
+        avg      = round(elapsed / done, 1)          # Sekunden pro Dokument
+        remaining = total - done
+        eta      = round(avg * remaining)             # Sekunden bis fertig
+
+    s["avg_sec_per_doc"] = avg
+    s["eta_seconds"]     = eta
+    # monotonic timestamps sind nicht JSON-serialisierbar – entfernen
+    s.pop("ocr_start_time",    None)
+    s.pop("ocr_last_doc_time", None)
+    return jsonify(s)
 
 
 @app.route("/api/start", methods=["POST"])

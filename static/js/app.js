@@ -192,6 +192,17 @@ function formatDate(iso) {
   return `${d}.${m}.${y}`;
 }
 
+function formatDuration(seconds) {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} Sek.`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return r > 0 ? `${m} Min. ${r} Sek.` : `${m} Min.`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h} Std. ${rm} Min.` : `${h} Std.`;
+}
+
 // ─── Export starten ────────────────────────────────────────────────────
 async function startExport(mode) {
   const from = $("date-from").value;
@@ -286,6 +297,16 @@ async function pollStatus() {
       const pct = Math.round((data.ocr_current / data.ocr_total) * 100);
       const ocrBar = $("progress-bar-ocr");
       ocrBar.style.width = pct + "%";
+
+      // Ø-Zeit + ETA
+      if (data.avg_sec_per_doc !== null && data.avg_sec_per_doc !== undefined) {
+        $("ocr-avg-time").textContent = `Ø ${formatDuration(data.avg_sec_per_doc)} / Dokument`;
+      }
+      if (data.eta_seconds !== null && data.eta_seconds !== undefined && data.eta_seconds >= 0) {
+        $("ocr-eta").textContent = data.eta_seconds < 10
+          ? "Gleich fertig…"
+          : `noch ca. ${formatDuration(data.eta_seconds)}`;
+      }
     }
 
     if (data.done) {
