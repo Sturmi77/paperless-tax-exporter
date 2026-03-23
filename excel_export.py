@@ -24,14 +24,16 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
-# Farben
-COLOR_HEADER_BG   = "1F497D"   # Dunkelblau für Header
+# Farben – komm|event CI
+COLOR_HEADER_BG   = "2997AB"   # Teal (komm|event Primärfarbe)
 COLOR_HEADER_FONT = "FFFFFF"   # Weiß
-COLOR_SUM_BG      = "DCE6F1"   # Hellblau für Summenzeile
-COLOR_OCR_BG      = "FFFFC7"   # Gelb für OCR-Vorschlagswerte
+COLOR_SUM_BG      = "D6EEF2"   # Teal-hell (abgeleitet)
+COLOR_SUM_FONT    = "1A6478"   # Teal-dunkel für SUMME-Beschriftung
+COLOR_OCR_BG      = "FFFFC7"   # Gelb für OCR-Vorschlagswerte (funktional, bleibt)
 COLOR_EMPTY_BG    = "F2F2F2"   # Hellgrau für manuell zu füllende Felder
+COLOR_HYPERLINK   = "1E7D8F"   # Teal-dunkel für Hyperlinks
 
-THIN   = Side(style="thin", color="BFBFBF")
+THIN   = Side(style="thin", color="C5D2D4")  # CI-Border
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 COLUMNS = [
@@ -113,10 +115,12 @@ def create_excel(documents, pdf_map, output_path, year_label,
     ws.title = "Rechnungsaufstellung"
 
     # ── Zeile 1: SUMME-Zeile ──────────────────────────────────────────────
-    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[1].height = 22
     sum_label = ws.cell(row=1, column=1, value=f"SUMME {year_label}")
-    sum_label.font      = Font(bold=True, size=11)
+    sum_label.font      = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+    sum_label.fill      = PatternFill("solid", fgColor=COLOR_SUM_BG)
     sum_label.alignment = Alignment(horizontal="left", vertical="center")
+    sum_label.border    = BORDER
 
     # ── Zeilen 2–3: leer ─────────────────────────────────────────────────
     ws.row_dimensions[2].height = 8
@@ -209,7 +213,7 @@ def create_excel(documents, pdf_map, output_path, year_label,
                 row=row, column=10,
                 value=f'=HYPERLINK("{unc_path}","{filename}")'
             )
-            cell_j.font      = Font(size=10, color="0563C1", underline="single")
+            cell_j.font      = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment = Alignment(horizontal="left", vertical="center")
             cell_j.border    = BORDER
         else:
@@ -230,8 +234,10 @@ def create_excel(documents, pdf_map, output_path, year_label,
     # Summenformel (Spalte H = Rechnungssumme)
     ws["H1"] = f"=SUM(H{data_start_row}:H{last_data_row})"
     ws["H1"].number_format = NUMBER_FORMAT
-    ws["H1"].font          = Font(bold=True, size=11)
+    ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+    ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
     ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
+    ws["H1"].border        = BORDER
 
     ws.freeze_panes = "A5"
     ws.print_area   = f"A1:{get_column_letter(len(COLUMNS))}{last_data_row}"
@@ -316,9 +322,139 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label):
         if filename and unc_base and not str(filename).startswith("=HYPERLINK"):
             unc_path = _build_unc_path(unc_base, year_label, filename)
             cell_j.value      = f'=HYPERLINK("{unc_path}","{filename}")'
-            cell_j.font       = Font(size=10, color="0563C1", underline="single")
+            cell_j.font       = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment  = Alignment(horizontal="left", vertical="center")
             cell_j.border     = BORDER
 
     wb.save(excel_path)
     return updated
+
+
+def get_existing_doc_ids(excel_path):
+    """
+    Liest alle Beleg-Nummern (Spalte A ab Zeile 5) aus einem bestehenden Excel.
+    Gibt ein Set von Strings zurück (ASN oder numerische ID).
+    """
+    if not os.path.exists(excel_path):
+        return set()
+    wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+    ws = wb["Rechnungsaufstellung"]
+    ids = set()
+    for row in ws.iter_rows(min_row=5, max_col=1, values_only=True):
+        val = row[0]
+        if val is not None:
+            ids.add(str(val))
+    wb.close()
+    return ids
+
+
+def append_to_excel(new_documents, pdf_map, excel_path, year_label, unc_base=None):
+    """
+    Hängt neue Dokumente an ein bestehendes Excel an.
+    Bestehende Zeilen werden nicht verändert.
+    Gibt die Anzahl neu angehängter Zeilen zurück.
+
+    new_documents: Liste von Paperless-Dokumenten die noch NICHT im Excel sind
+    pdf_map:       {doc_id: filename}
+    """
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
+    if not new_documents:
+        return 0
+
+    wb = openpyxl.load_workbook(excel_path)
+    ws = wb["Rechnungsaufstellung"]
+
+    # Letzte belegte Zeile in Spalte A finden
+    last_row = 4  # Mindestens Header-Zeile
+    for row in ws.iter_rows(min_row=5, max_col=1):
+        if row[0].value is not None:
+            last_row = row[0].row
+
+    insert_start = last_row + 1
+
+    sorted_new = sorted(
+        new_documents,
+        key=lambda d: d.get("created", "1900-01-01") or "1900-01-01"
+    )
+
+    for i, doc in enumerate(sorted_new):
+        row = insert_start + i
+        ws.row_dimensions[row].height = 18
+        doc_id = doc.get("id")
+
+        # A: Beleg-Nr.
+        beleg_nr = doc.get("archive_serial_number") or doc_id
+        _data_cell(ws, row, 1, beleg_nr, align="center")
+
+        # B: Re-Dat
+        created_str = doc.get("created", "")
+        dt = None
+        if created_str:
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.strptime(created_str[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        _data_cell(ws, row, 2, dt, align="center", number_fmt=DATE_FORMAT)
+
+        # C: Zahlungsdatum
+        _data_cell(ws, row, 3, None, align="center",
+                   number_fmt=DATE_FORMAT, bg=COLOR_EMPTY_BG)
+        # D: Bar / Konto / KK
+        _data_cell(ws, row, 4, None, align="center", bg=COLOR_EMPTY_BG)
+
+        # E: Absender
+        correspondent = doc.get("correspondent_name") or None
+        if correspondent:
+            _data_cell(ws, row, 5, correspondent, align="left")
+        else:
+            _data_cell(ws, row, 5, None, align="left", bg=COLOR_EMPTY_BG)
+
+        # F: Beschreibung
+        _data_cell(ws, row, 6, doc.get("title", ""), align="left")
+
+        # G: Kennzahl
+        doc_type_name = (doc.get("document_type_name")
+                         or str(doc.get("document_type", "")) or "")
+        _data_cell(ws, row, 7, doc_type_name, align="left")
+
+        # H: Rechnungssumme (leer – kann später per Stufe 2 befüllt werden)
+        _data_cell(ws, row, 8, None, align="right",
+                   number_fmt=NUMBER_FORMAT, bg=COLOR_EMPTY_BG)
+
+        # I: Rechnungssumme inkl. Privatanteil
+        _data_cell(ws, row, 9, None, align="right",
+                   number_fmt=NUMBER_FORMAT, bg=COLOR_EMPTY_BG)
+
+        # J: Dateiname / Hyperlink
+        filename = pdf_map.get(doc_id, "")
+        if filename and unc_base:
+            unc_path = _build_unc_path(unc_base, year_label, filename)
+            cell_j = ws.cell(
+                row=row, column=10,
+                value=f'=HYPERLINK("{unc_path}","{filename}")'
+            )
+            cell_j.font      = Font(size=10, color=COLOR_HYPERLINK, underline="single")
+            cell_j.alignment = Alignment(horizontal="left", vertical="center")
+            cell_j.border    = BORDER
+        else:
+            _data_cell(ws, row, 10, filename, align="left")
+
+    # SUMME-Formel auf neue letzte Zeile ausdehnen
+    new_last_row = insert_start + len(sorted_new) - 1
+    ws["H1"] = f"=SUM(H5:H{new_last_row})"
+    ws["H1"].number_format = NUMBER_FORMAT
+    ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+    ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
+    ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
+    ws["H1"].border        = BORDER
+
+    # Tabellen-Referenz ausweiten
+    for tbl in ws.tables.values():
+        if tbl.displayName == "Tabelle1":
+            tbl.ref = f"A4:{get_column_letter(len(COLUMNS))}{new_last_row}"
+            break
+
+    wb.save(excel_path)
+    return len(sorted_new)

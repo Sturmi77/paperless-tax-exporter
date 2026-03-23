@@ -8,7 +8,8 @@ import time as _time
 from datetime import datetime, date
 from flask import Flask, render_template, request, jsonify, send_file
 
-from excel_export import create_excel, update_excel_with_ocr
+from excel_export import create_excel, update_excel_with_ocr, \
+                         append_to_excel, get_existing_doc_ids
 from pdf_export import download_pdfs
 from llm_extract import extract_from_ocr, check_ollama_available
 
@@ -22,14 +23,13 @@ _BUILD_VERSION = str(int(_time.time()))
 def inject_version():
     return {"ver": _BUILD_VERSION}
 
-PAPERLESS_URL   = os.environ.get("PAPERLESS_URL",   "http://192.168.178.115:8000")
-PAPERLESS_TOKEN = os.environ.get("PAPERLESS_TOKEN", "")
-OUTPUT_DIR      = os.environ.get("OUTPUT_DIR",      "/output")
-OLLAMA_URL      = os.environ.get("OLLAMA_URL",      "http://192.168.178.115:11434")
-OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL",    "qwen2.5:3b")
+PAPERLESS_URL    = os.environ.get("PAPERLESS_URL",    "http://192.168.178.115:8000")
+PAPERLESS_TOKEN  = os.environ.get("PAPERLESS_TOKEN",  "")
+OUTPUT_DIR       = os.path.realpath(os.environ.get("OUTPUT_DIR", "/output"))
+OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://192.168.178.115:11434")
+OLLAMA_MODEL     = os.environ.get("OLLAMA_MODEL",     "qwen2.5:3b")
 WINDOWS_UNC_PATH = os.environ.get("WINDOWS_UNC_PATH", r"\\SynologyDS923\downloads\steuerberater")
 
-# Ollama Env-Vars weitergeben an llm_extract Modul
 os.environ.setdefault("OLLAMA_URL",   OLLAMA_URL)
 os.environ.setdefault("OLLAMA_MODEL", OLLAMA_MODEL)
 
@@ -47,21 +47,44 @@ def _assert_output_path(path: str):
 # ── Globaler Job-Status ────────────────────────────────────────────────
 job_status = {
     "running":    False,
-    "stage":      None,    # "stage1" | "stage2"
+    "stage":      None,       # "stage0" | "stage1" | "stage2"
     "log":        [],
     "done":       False,
     "error":      None,
+    "cancelled":  False,      # Issue #2
     "excel_path": None,
     "doc_count":  0,
-    "ocr_current": 0,      # aktuelles Dokument Stufe 2
-    "ocr_total":   0,      # Gesamtanzahl Stufe 2
+    "ocr_current": 0,
+    "ocr_total":   0,
     "ocr_current_title": "",
-    "ocr_start_time":    None,  # Zeitstempel Start Stufe 2
-    "ocr_last_doc_time": None,  # Zeitstempel nach letztem Dokument
+    "ocr_start_time":    None,
+    "ocr_last_doc_time": None,
+    "cancellable":       False,    # True sobald Stufe 2 gestartet, bis done
 }
-job_lock = threading.Lock()
+job_lock     = threading.Lock()
+cancel_event = threading.Event()   # Issue #2: Abbruch-Steuerung
 
 
+def _job_status_reset(stage):
+    """Job-Status für neuen Lauf initialisieren."""
+    is_stage2 = (stage == "stage2")
+    with job_lock:
+        job_status.update({
+            "log": [], "done": False, "error": None, "cancelled": False,
+            "excel_path": None, "doc_count": 0, "stage": stage,
+            "ocr_current": 0, "ocr_total": 0, "ocr_current_title": "",
+            "ocr_start_time": None, "ocr_last_doc_time": None,
+            "cancellable": is_stage2,  # sofort ab Start von stage2 abbrechbar
+        })
+    cancel_event.clear()
+
+
+def _log(msg):
+    with job_lock:
+        job_status["log"].append(msg)
+
+
+# ── Paperless API (read-only) ──────────────────────────────────────────
 def paperless_get(path, params=None):
     """Einziger HTTP-Zugang zu Paperless – ausschließlich GET (read-only)."""
     if not path.startswith("/api/"):
@@ -111,11 +134,12 @@ def get_all_correspondents():
     return result
 
 
-def get_documents(date_from, date_to, tag_ids):
+def get_documents(date_from, date_to, tag_ids, date_field="created"):
+    """Issue #3: date_field = 'created' (Belegdatum) oder 'added' (Scan-Datum)."""
     documents = []
     params = {
-        "created__date__gte": date_from,
-        "created__date__lte": date_to,
+        f"{date_field}__date__gte": date_from,
+        f"{date_field}__date__lte": date_to,
         "page_size": 100,
     }
     if tag_ids:
@@ -136,40 +160,31 @@ def get_documents(date_from, date_to, tag_ids):
 
 
 def enrich_documents_with_correspondents(documents, correspondents):
-    """Hängt correspondent_name an jedes Dokument."""
     for doc in documents:
         cid = doc.get("correspondent")
         doc["correspondent_name"] = correspondents.get(cid) if cid else None
     return documents
 
 
-# ── Stufe 1: Download + Excel ──────────────────────────────────────────
-def run_stage1(date_from, date_to, tag_ids, tag_names, year_label):
+# ── Stufe 0: Nur Excel (Issue #1) ─────────────────────────────────────
+def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="created"):
+    """Erstellt nur die Excel-Datei – kein PDF-Download, kein OCR."""
     global job_status
     try:
-        with job_lock:
-            job_status.update({
-                "log": [], "done": False, "error": None,
-                "excel_path": None, "doc_count": 0, "stage": "stage1",
-                "ocr_current": 0, "ocr_total": 0, "ocr_current_title": "",
-            })
-
-        def log(msg):
-            with job_lock:
-                job_status["log"].append(msg)
-
-        log(f"Stufe 1 gestartet: {date_from} bis {date_to}")
+        _job_status_reset("stage0")
+        _log(f"Nur Excel – gestartet: {date_from} bis {date_to}")
         if tag_names:
-            log(f"Tags: {', '.join(tag_names)}")
+            _log(f"Tags: {', '.join(tag_names)}")
+        _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
 
-        log("Lade Correspondents aus Paperless…")
+        _log("Lade Correspondents aus Paperless…")
         correspondents = get_all_correspondents()
-        log(f"{len(correspondents)} Correspondents geladen.")
+        _log(f"{len(correspondents)} Correspondents geladen.")
 
-        log("Lade Dokumentenliste…")
-        docs = get_documents(date_from, date_to, tag_ids)
+        _log("Lade Dokumentenliste…")
+        docs = get_documents(date_from, date_to, tag_ids, date_field)
         docs = enrich_documents_with_correspondents(docs, correspondents)
-        log(f"{len(docs)} Dokumente gefunden.")
+        _log(f"{len(docs)} Dokumente gefunden.")
 
         if not docs:
             with job_lock:
@@ -181,27 +196,107 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label):
             job_status["doc_count"] = len(docs)
 
         export_folder = os.path.join(OUTPUT_DIR, year_label)
-        pdf_folder    = os.path.join(export_folder, "Belege")
         _assert_output_path(export_folder)
-        _assert_output_path(pdf_folder)
-        os.makedirs(pdf_folder, exist_ok=True)
-        log(f"Ausgabeordner: {export_folder}")
+        os.makedirs(export_folder, exist_ok=True)
+        _log(f"Ausgabeordner: {export_folder}")
 
-        log("Lade PDFs herunter…")
-        pdf_map = download_pdfs(docs, pdf_folder, PAPERLESS_URL, PAPERLESS_TOKEN, log)
-
-        log("Erstelle Excel-Datei…")
+        _log("Erstelle Excel-Datei…")
         excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
         excel_path     = os.path.join(export_folder, excel_filename)
-        create_excel(docs, pdf_map, excel_path, year_label,
-                     unc_base=WINDOWS_UNC_PATH)
-        log(f"Excel gespeichert: {excel_filename}")
+        create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH)
+        _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
             job_status.update({
-                "done": True, "running": False,
-                "excel_path": excel_path,
-                "log": job_status["log"] + [f"✓ Stufe 1 abgeschlossen. {len(docs)} Belege exportiert."],
+                "done": True, "running": False, "excel_path": excel_path,
+                "log": job_status["log"] + [f"✓ Excel abgeschlossen. {len(docs)} Belege exportiert."],
+            })
+
+    except Exception as e:
+        with job_lock:
+            job_status.update({
+                "done": True, "running": False, "error": str(e),
+                "log": job_status["log"] + [f"✗ Fehler: {e}"],
+            })
+
+
+# ── Stufe 1: Download + Excel ──────────────────────────────────────────
+def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
+              date_field="created", append_mode=False):
+    global job_status
+    try:
+        _job_status_reset("stage1")
+        mode_label = "Nachtrag" if append_mode else "Stufe 1"
+        _log(f"{mode_label} gestartet: {date_from} bis {date_to}")
+        if tag_names:
+            _log(f"Tags: {', '.join(tag_names)}")
+        _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
+
+        _log("Lade Correspondents aus Paperless…")
+        correspondents = get_all_correspondents()
+        _log(f"{len(correspondents)} Correspondents geladen.")
+
+        _log("Lade Dokumentenliste…")
+        docs = get_documents(date_from, date_to, tag_ids, date_field)
+        docs = enrich_documents_with_correspondents(docs, correspondents)
+        _log(f"{len(docs)} Dokumente gefunden.")
+
+        if not docs:
+            with job_lock:
+                job_status.update({"done": True, "running": False,
+                    "error": "Keine Dokumente im gewählten Zeitraum/Tag gefunden."})
+            return
+
+        export_folder  = os.path.join(OUTPUT_DIR, year_label)
+        pdf_folder     = os.path.join(export_folder, "Belege")
+        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
+        excel_path     = os.path.join(export_folder, excel_filename)
+        _assert_output_path(export_folder)
+        _assert_output_path(pdf_folder)
+        os.makedirs(pdf_folder, exist_ok=True)
+        _log(f"Ausgabeordner: {export_folder}")
+
+        # Append-Modus: nur wirklich neue Dokumente verarbeiten
+        if append_mode and os.path.exists(excel_path):
+            existing_ids = get_existing_doc_ids(excel_path)
+            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden.")
+            new_docs = [
+                d for d in docs
+                if str(d.get("archive_serial_number") or d.get("id")) not in existing_ids
+            ]
+            _log(f"{len(new_docs)} neue Belege werden hinzugefügt.")
+            if not new_docs:
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                        "error": "Keine neuen Dokumente gefunden – alle bereits im Excel vorhanden."})
+                return
+            docs_to_process = new_docs
+        else:
+            docs_to_process = docs
+
+        with job_lock:
+            job_status["doc_count"] = len(docs_to_process)
+
+        _log(f"Lade {len(docs_to_process)} PDFs herunter…")
+        pdf_map = download_pdfs(docs_to_process, pdf_folder, PAPERLESS_URL, PAPERLESS_TOKEN, _log)
+
+        if append_mode and os.path.exists(excel_path):
+            _log("Hänge neue Zeilen ans Excel an…")
+            added = append_to_excel(docs_to_process, pdf_map, excel_path, year_label,
+                                    unc_base=WINDOWS_UNC_PATH)
+            _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt.")
+        else:
+            _log("Erstelle Excel-Datei…")
+            create_excel(docs_to_process, pdf_map, excel_path, year_label,
+                         unc_base=WINDOWS_UNC_PATH)
+            _log(f"Excel gespeichert: {excel_filename}")
+
+        with job_lock:
+            job_status.update({
+                "done": True, "running": False, "excel_path": excel_path,
+                "log": job_status["log"] + [
+                    f"✓ {mode_label} abgeschlossen. {len(docs_to_process)} Belege exportiert."
+                ],
             })
 
     except Exception as e:
@@ -214,50 +309,53 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label):
 
 # ── Stufe 2: OCR-Analyse via Ollama ───────────────────────────────────
 def run_stage2(excel_path, year_label, docs=None,
-               date_from=None, date_to=None, tag_ids=None):
-    """
-    Liest PDFs aus dem bestehenden Export-Ordner,
-    holt OCR-Text aus Paperless und schreibt Ergebnisse ins Excel.
-    """
+               date_from=None, date_to=None, tag_ids=None, date_field="created"):
+    """Issue #2: cancel_event wird nach jedem Dokument geprüft."""
     global job_status
     try:
-        with job_lock:
-            job_status.update({
-                "log": [], "done": False, "error": None,
-                "stage": "stage2", "ocr_current": 0, "ocr_total": 0,
-                "ocr_current_title": "",
-                "ocr_start_time":    None,
-                "ocr_last_doc_time": None,
-            })
+        _job_status_reset("stage2")
 
-        def log(msg):
-            with job_lock:
-                job_status["log"].append(msg)
-
-        # Ollama verfügbar?
         ok, msg = check_ollama_available()
         if not ok:
             raise RuntimeError(f"Ollama nicht verfügbar: {msg}")
-        log(f"Ollama bereit: {msg}")
+        _log(f"Ollama bereit: {msg}")
 
-        # Dokumente laden falls nicht übergeben
         if docs is None:
             if not (date_from and date_to):
                 raise ValueError("Kein Datumsbereich für Stufe 2 angegeben.")
-            log("Lade Dokumentenliste…")
+            _log("Lade Dokumentenliste…")
             correspondents = get_all_correspondents()
-            docs = get_documents(date_from, date_to, tag_ids or [])
+            # Abbruch-Check nach Correspondents-Laden
+            if cancel_event.is_set():
+                _log("⚠ Job vor OCR-Start abgebrochen.")
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                                       "cancelled": True, "cancellable": False})
+                return
+            docs = get_documents(date_from, date_to, tag_ids or [], date_field)
             docs = enrich_documents_with_correspondents(docs, correspondents)
-            log(f"{len(docs)} Dokumente geladen.")
+            _log(f"{len(docs)} Dokumente geladen.")
+            # Abbruch-Check nach Dokumente-Laden
+            if cancel_event.is_set():
+                _log("⚠ Job vor OCR-Start abgebrochen.")
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                                       "cancelled": True, "cancellable": False})
+                return
 
         with job_lock:
             job_status["ocr_total"]      = len(docs)
             job_status["ocr_start_time"] = _time.monotonic()
 
-        log(f"Starte OCR-Analyse für {len(docs)} Dokumente…")
+        _log(f"Starte OCR-Analyse für {len(docs)} Dokumente…")
         ocr_results = {}
 
         for idx, doc in enumerate(docs, start=1):
+            # Issue #2: Abbruch-Check
+            if cancel_event.is_set():
+                _log(f"⚠ Job abgebrochen nach {idx - 1} von {len(docs)} Dokumenten.")
+                break
+
             doc_id = doc.get("id")
             title  = doc.get("title", f"Dokument {doc_id}")
 
@@ -266,48 +364,45 @@ def run_stage2(excel_path, year_label, docs=None,
                 job_status["ocr_current_title"] = title
                 job_status["ocr_last_doc_time"] = _time.monotonic()
 
-            log(f"[{idx}/{len(docs)}] Analysiere: {title}")
+            _log(f"[{idx}/{len(docs)}] Analysiere: {title}")
 
-            # Correspondent schon bekannt? Dann nur Betrag via LLM
             has_correspondent = bool(doc.get("correspondent_name"))
-
             content = doc.get("content", "")
             if not content:
-                # Aus Paperless nachladen (content ist manchmal nicht im List-Endpoint)
                 try:
-                    detail = paperless_get(f"/api/documents/{doc_id}/")
+                    detail  = paperless_get(f"/api/documents/{doc_id}/")
                     content = detail.get("content", "")
                 except Exception:
                     pass
 
             result = extract_from_ocr(content)
-
             if result.get("error"):
-                log(f"  ⚠ LLM-Fehler: {result['error']}")
+                _log(f"  ⚠ LLM-Fehler: {result['error']}")
 
             ocr_results[doc_id] = {
                 "absender": None if has_correspondent else result.get("absender"),
                 "betrag":   result.get("betrag"),
             }
-
             if result.get("absender") and not has_correspondent:
-                log(f"  Absender: {result['absender']}")
+                _log(f"  Absender: {result['absender']}")
             if result.get("betrag") is not None:
-                log(f"  Betrag: {result['betrag']:.2f} €")
+                _log(f"  Betrag: {result['betrag']:.2f} €")
 
-        log("Schreibe OCR-Ergebnisse ins Excel…")
-        updated = update_excel_with_ocr(
-            excel_path, ocr_results, WINDOWS_UNC_PATH, year_label
-        )
-        log(f"✓ Stufe 2 abgeschlossen. {updated} Felder aktualisiert.")
+        # Auch bei Abbruch: bisherige Ergebnisse sichern
+        _log("Schreibe OCR-Ergebnisse ins Excel…")
+        updated   = update_excel_with_ocr(excel_path, ocr_results, WINDOWS_UNC_PATH, year_label)
+        cancelled = cancel_event.is_set()
+        suffix    = " (abgebrochen)" if cancelled else ""
+        _log(f"✓ Stufe 2 abgeschlossen. {updated} Felder aktualisiert.{suffix}")
 
         with job_lock:
-            job_status.update({"done": True, "running": False})
+            job_status.update({"done": True, "running": False,
+                               "cancelled": cancelled, "cancellable": False})
 
     except Exception as e:
         with job_lock:
             job_status.update({
-                "done": True, "running": False, "error": str(e),
+                "done": True, "running": False, "cancellable": False, "error": str(e),
                 "log": job_status["log"] + [f"✗ Fehler: {e}"],
             })
 
@@ -331,7 +426,6 @@ def api_status():
     with job_lock:
         s = dict(job_status)
 
-    # Durchschnitt + ETA berechnen (nur während Stufe 2 aktiv)
     avg = None
     eta = None
     if (
@@ -340,19 +434,53 @@ def api_status():
         and s.get("ocr_current", 0) > 0
         and s.get("ocr_total", 0) > 0
     ):
-        elapsed  = (s["ocr_last_doc_time"] or _time.monotonic()) - s["ocr_start_time"]
-        done     = s["ocr_current"]
-        total    = s["ocr_total"]
-        avg      = round(elapsed / done, 1)          # Sekunden pro Dokument
+        elapsed   = (s["ocr_last_doc_time"] or _time.monotonic()) - s["ocr_start_time"]
+        done      = s["ocr_current"]
+        total     = s["ocr_total"]
+        avg       = round(elapsed / done, 1)
         remaining = total - done
-        eta      = round(avg * remaining)             # Sekunden bis fertig
+        eta       = round(avg * remaining)
 
     s["avg_sec_per_doc"] = avg
     s["eta_seconds"]     = eta
-    # monotonic timestamps sind nicht JSON-serialisierbar – entfernen
     s.pop("ocr_start_time",    None)
     s.pop("ocr_last_doc_time", None)
     return jsonify(s)
+
+
+@app.route("/api/cancel", methods=["POST"])
+def api_cancel():
+    """Issue #2: Laufenden Stufe-2-Job abbrechen (auch während Ladevorgang)."""
+    with job_lock:
+        cancellable = job_status.get("cancellable", False)
+    if not cancellable:
+        return jsonify({"error": "Kein abbrechbarer Job aktiv."}), 400
+    cancel_event.set()
+    _log("⚠ Abbruch angefordert – wird nach aktuellem Schritt gestoppt…")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/check-exists")
+def api_check_exists():
+    """Issue #4: Prüft ob Export-Dateien für ein Jahr bereits vorhanden sind."""
+    year = request.args.get("year", "")
+    if not year:
+        return jsonify({"error": "Parameter 'year' fehlt."}), 400
+
+    export_folder  = os.path.join(OUTPUT_DIR, year)
+    excel_path     = os.path.join(export_folder, f"Rechnungsaufstellung_{year}.xlsx")
+    pdf_folder     = os.path.join(export_folder, "Belege")
+
+    excel_exists = os.path.isfile(excel_path)
+    pdfs_exist   = os.path.isdir(pdf_folder)
+    pdf_count    = len([f for f in os.listdir(pdf_folder) if f.endswith(".pdf")]) if pdfs_exist else 0
+
+    return jsonify({
+        "excel_exists": excel_exists,
+        "pdfs_exist":   pdfs_exist,
+        "pdf_count":    pdf_count,
+        "excel_name":   f"Rechnungsaufstellung_{year}.xlsx" if excel_exists else None,
+    })
 
 
 @app.route("/api/start", methods=["POST"])
@@ -362,55 +490,63 @@ def api_start():
         if job_status["running"]:
             return jsonify({"error": "Ein Job läuft bereits."}), 400
 
-    data       = request.json
-    date_from  = data.get("date_from")
-    date_to    = data.get("date_to")
-    tag_ids    = data.get("tag_ids", [])
-    tag_names  = data.get("tag_names", [])
-    year_label = data.get("year_label", date_from[:4] if date_from else "export")
-    mode       = data.get("mode", "stage1")  # "stage1" | "stage2" | "both"
+    data        = request.json
+    date_from   = data.get("date_from")
+    date_to     = data.get("date_to")
+    tag_ids     = data.get("tag_ids", [])
+    tag_names   = data.get("tag_names", [])
+    year_label  = data.get("year_label", date_from[:4] if date_from else "export")
+    mode        = data.get("mode", "stage1")   # "stage0"|"stage1"|"stage2"|"both"
+    date_field  = data.get("date_field", "created")  # Issue #3
+    append_mode = data.get("append_mode", False)      # Issue #4: nur neue hinzufügen
 
     if not date_from or not date_to:
         return jsonify({"error": "Bitte Datumsbereich angeben."}), 400
 
     with job_lock:
-        job_status.update({"running": True, "done": False,
-                           "log": [], "error": None})
+        job_status.update({"running": True, "done": False, "log": [], "error": None})
 
-    if mode == "stage2":
-        # Stufe 2 standalone: Excel muss bereits existieren
+    if mode == "stage0":
+        thread = threading.Thread(
+            target=run_stage0,
+            args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
+            daemon=True,
+        )
+    elif mode == "stage2":
         excel_path = os.path.join(OUTPUT_DIR, year_label,
                                   f"Rechnungsaufstellung_{year_label}.xlsx")
         if not os.path.exists(excel_path):
             with job_lock:
                 job_status["running"] = False
             return jsonify({
-                "error": f"Excel nicht gefunden. Bitte zuerst Stufe 1 ausführen."
+                "error": "Excel nicht gefunden. Bitte zuerst Stufe 1 ausführen."
             }), 400
         with job_lock:
             job_status["excel_path"] = excel_path
         thread = threading.Thread(
             target=run_stage2,
-            args=(excel_path, year_label, None, date_from, date_to, tag_ids),
+            args=(excel_path, year_label, None, date_from, date_to, tag_ids, date_field),
             daemon=True,
         )
     elif mode == "both":
-        # Beide Stufen sequenziell in einem Thread
         def run_both():
-            run_stage1(date_from, date_to, tag_ids, tag_names, year_label)
+            run_stage1(date_from, date_to, tag_ids, tag_names, year_label, date_field,
+                       append_mode=append_mode)
             with job_lock:
-                ep = job_status.get("excel_path")
+                ep  = job_status.get("excel_path")
                 err = job_status.get("error")
             if ep and not err:
                 with job_lock:
                     job_status.update({"running": True, "done": False})
-                run_stage2(ep, year_label, None, date_from, date_to, tag_ids)
+                cancel_event.clear()  # Sicherstellen dass kein alter Abbruch-State hängt
+                run_stage2(ep, year_label, None, date_from, date_to, tag_ids, date_field)
         thread = threading.Thread(target=run_both, daemon=True)
     else:
-        # Stufe 1 only
+        # stage1
         thread = threading.Thread(
             target=run_stage1,
-            args=(date_from, date_to, tag_ids, tag_names, year_label),
+            args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
+            kwargs={"append_mode": append_mode},
             daemon=True,
         )
 
@@ -449,7 +585,6 @@ def api_health():
         status["paperless_reachable"] = False
         status["error"] = str(e)
 
-    # Ollama Check
     ok, msg = check_ollama_available()
     status["ollama_available"] = ok
     status["ollama_status"]    = msg

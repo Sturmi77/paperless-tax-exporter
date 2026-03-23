@@ -29,6 +29,7 @@
       <section class="card" id="config-card">
         <h2 class="card-title">Export konfigurieren</h2>
 
+        <!-- 1. Info-Banner -->
         <div class="info-box">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
@@ -37,13 +38,13 @@
           <span>Paperless wird ausschließlich lesend verwendet. Exportierte Dateien werden im konfigurierten Ausgabepfad gespeichert.</span>
         </div>
 
-        <!-- Schnellauswahl Kalenderjahr -->
+        <!-- 2. Schnellauswahl Kalenderjahr -->
         <div class="field-group">
           <label class="field-label">Schnellauswahl Kalenderjahr</label>
           <div class="quick-years" id="quick-years"></div>
         </div>
 
-        <!-- Datumsbereich -->
+        <!-- 3. Datumsbereich + Pill-Toggle -->
         <div class="field-row">
           <div class="field-group">
             <label class="field-label" for="date-from">Von</label>
@@ -54,20 +55,104 @@
             <input class="input" type="date" id="date-to" />
           </div>
         </div>
-
-        <!-- Tags -->
-        <div class="field-group">
-          <label class="field-label">
-            Tags filtern
-            <span class="hint">Kein Tag gewählt = alle Dokumente im Zeitraum</span>
-          </label>
-          <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
-          <div id="tag-list" class="tag-list hidden"></div>
-          <div id="tag-error" class="error-msg hidden"></div>
+        <div class="date-filter-toggle">
+          <button type="button" class="pill-btn pill-active" id="pill-created" data-value="created">
+            Belegdatum
+          </button>
+          <button type="button" class="pill-btn" id="pill-added" data-value="added">
+            Scan-Datum
+          </button>
         </div>
 
-        <!-- Ausgabepfad -->
-        <div class="field-group">
+        <!-- 4. Tag-Auswahl (Chip-Dropdown) -->
+        <div class="field-group" style="margin-top: 20px;">
+          <label class="field-label">
+            Tags filtern
+            <span class="hint">Kein Tag = alle Dokumente im Zeitraum</span>
+          </label>
+          <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
+          <div id="tag-error" class="error-msg hidden"></div>
+
+          <!-- Chip-Dropdown (initial hidden, wird durch JS befüllt) -->
+          <div class="tag-dropdown hidden" id="tag-dropdown">
+            <div class="tag-input-wrap" id="tag-input-wrap">
+              <div class="tag-chips" id="tag-chips">
+                <!-- gewählte Tags erscheinen hier als Chips -->
+              </div>
+              <input
+                type="text"
+                class="tag-search"
+                id="tag-search"
+                placeholder="Tags wählen…"
+                autocomplete="off"
+              />
+            </div>
+            <div class="tag-panel hidden" id="tag-panel">
+              <!-- Optionen werden per JS befüllt -->
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. Aktions-Buttons -->
+        <div class="actions actions-stacked">
+
+          <button class="btn btn-primary btn-both" id="btn-both" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            <span>Vollständiger Export<small>PDFs · Excel · OCR-Analyse</small></span>
+          </button>
+
+          <button class="btn btn-primary" id="btn-stage1" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>PDFs &amp; Excel<small>Download + Aufstellung erstellen</small></span>
+          </button>
+
+          <button class="btn btn-secondary" id="btn-stage0" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+            </svg>
+            <span>Nur Excel<small>Ohne PDF-Download</small></span>
+          </button>
+
+          <button class="btn btn-secondary" id="btn-stage2" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <span>OCR-Analyse<small>Bestehende Dateien verwenden</small></span>
+          </button>
+
+          <span class="selected-info" id="selected-info"></span>
+        </div>
+
+        <!-- 6. Tipp-Box -->
+        <details class="tip-box" id="tip-nachtrag">
+          <summary class="tip-summary">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            Tipp: Nachträglich gescannte Belege hinzufügen
+          </summary>
+          <div class="tip-content">
+            <p>Jahresexport bereits abgeschlossen und eine vergessene Rechnung nachgescannt? Kein Neuexport nötig:</p>
+            <ol>
+              <li>Gleichen Datumsbereich wie beim Erstexport wählen</li>
+              <li><strong>Stufe 1</strong> oder <strong>Stufe 1 + 2</strong> starten</li>
+              <li>Im Dialog <strong>„Nur neue hinzufügen"</strong> wählen</li>
+            </ol>
+            <p class="tip-result">Bereits vorhandene Belege werden übersprungen – nur neue Dokumente werden heruntergeladen und ans Excel angehängt.</p>
+          </div>
+        </details>
+
+        <!-- 7. Ausgabepfad (ans Ende) -->
+        <div class="field-group" style="margin-top: 12px;">
           <label class="field-label">Ausgabepfad</label>
           <div class="output-path">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -75,36 +160,6 @@
             </svg>
             <span id="output-path-text">…</span>
           </div>
-        </div>
-
-        <!-- Aktions-Buttons -->
-        <div class="actions actions-stacked">
-
-          <!-- Stufe 1 -->
-          <button class="btn btn-primary" id="btn-stage1" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polygon points="5 3 19 12 5 21 5 3"/>
-            </svg>
-            Stufe 1: PDFs &amp; Excel
-          </button>
-
-          <!-- Beide Stufen -->
-          <button class="btn btn-primary btn-both" id="btn-both" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polygon points="5 3 19 12 5 21 5 3"/>
-            </svg>
-            Stufe 1 + 2: PDFs, Excel &amp; OCR
-          </button>
-
-          <!-- Stufe 2 standalone -->
-          <button class="btn btn-secondary" id="btn-stage2" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-            Stufe 2: OCR-Analyse (bestehende Dateien)
-          </button>
-
-          <span class="selected-info" id="selected-info"></span>
         </div>
       </section>
 
@@ -146,6 +201,18 @@
             Neuer Export
           </button>
         </div>
+
+        <!-- Issue #2: Abbrechen-Button -->
+        <div class="cancel-area">
+          <button class="btn btn-danger hidden" id="btn-cancel">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+            OCR abbrechen
+          </button>
+        </div>
       </section>
 
     </main>
@@ -153,9 +220,35 @@
     <footer class="footer">
       <a href="http://www.kommevent.at/" target="_blank">komm|event</a>
       · Agentur für Kommunikation &amp; Events
-      · Steuerberater Export v2.0 · <span id="footer-year"></span>
+      · Steuerberater Export v2.1 · <span id="footer-year"></span>
     </footer>
 
+  </div>
+
+  <!-- Issue #4: Überschreib-Modal -->
+  <div id="overwrite-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e69800" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </div>
+      <h3 class="modal-title">Dateien bereits vorhanden</h3>
+      <p class="modal-text">Für diesen Zeitraum existieren bereits exportierte Dateien:</p>
+      <ul class="modal-details" id="overwrite-details"></ul>
+      <p class="modal-text modal-text-warn">Beim Überschreiben werden diese Dateien ersetzt – manuelle Einträge (Zahlungsdatum, Kennzahl) gehen verloren.</p>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btn-overwrite-append">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          Nur neue hinzufügen
+        </button>
+        <button class="btn btn-danger" id="btn-overwrite-confirm">Alles überschreiben</button>
+        <button class="btn btn-secondary" id="btn-overwrite-cancel">Abbrechen</button>
+      </div>
+    </div>
   </div>
 
   <script>
