@@ -313,11 +313,17 @@ async function startExport(mode) {
 
 // ─── Issue #2: Job abbrechen ───────────────────────────────────────────
 async function cancelJob() {
-  $("btn-cancel").disabled = true;
-  $("btn-cancel").textContent = "Abbrechen…";
+  const btn = $("btn-cancel");
+  btn.disabled  = true;
+  btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+    <circle cx="12" cy="12" r="10"/>
+    <line x1="15" y1="9" x2="9" y2="15"/>
+    <line x1="9" y1="9" x2="15" y2="15"/>
+  </svg> Wird abgebrochen…`;
   try {
     await fetch("/api/cancel", { method: "POST" });
   } catch { /* ignore */ }
+  // Button bleibt disabled – pollStatus() versteckt ihn sobald cancellable=false
 }
 
 // ─── Status pollen ─────────────────────────────────────────────────────
@@ -341,9 +347,18 @@ async function pollStatus() {
     }
     lastLogCount = lines.length;
 
-    // Issue #2: Abbrechen-Button zeigen während OCR läuft
-    if (data.stage === "stage2" && !data.done) {
-      $("btn-cancel").classList.remove("hidden");
+    // Issue #2: Abbrechen-Button – an 'cancellable' koppeln (auch während Ladevorgang)
+    if (data.cancellable) {
+      const btn = $("btn-cancel");
+      btn.classList.remove("hidden");
+      btn.disabled    = false;
+      btn.textContent = "";
+      // Icon + Text wiederherstellen falls vorher geändert
+      btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="15" y1="9" x2="9" y2="15"/>
+        <line x1="9" y1="9" x2="15" y2="15"/>
+      </svg> OCR abbrechen`;
     } else {
       $("btn-cancel").classList.add("hidden");
     }

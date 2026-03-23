@@ -58,6 +58,7 @@ job_status = {
     "ocr_current_title": "",
     "ocr_start_time":    None,
     "ocr_last_doc_time": None,
+    "cancellable":       False,    # True sobald Stufe 2 gestartet, bis done
 }
 job_lock     = threading.Lock()
 cancel_event = threading.Event()   # Issue #2: Abbruch-Steuerung
@@ -65,12 +66,14 @@ cancel_event = threading.Event()   # Issue #2: Abbruch-Steuerung
 
 def _job_status_reset(stage):
     """Job-Status für neuen Lauf initialisieren."""
+    is_stage2 = (stage == "stage2")
     with job_lock:
         job_status.update({
             "log": [], "done": False, "error": None, "cancelled": False,
             "excel_path": None, "doc_count": 0, "stage": stage,
             "ocr_current": 0, "ocr_total": 0, "ocr_current_title": "",
             "ocr_start_time": None, "ocr_last_doc_time": None,
+            "cancellable": is_stage2,  # sofort ab Start von stage2 abbrechbar
         })
     cancel_event.clear()
 
@@ -292,9 +295,23 @@ def run_stage2(excel_path, year_label, docs=None,
                 raise ValueError("Kein Datumsbereich für Stufe 2 angegeben.")
             _log("Lade Dokumentenliste…")
             correspondents = get_all_correspondents()
+            # Abbruch-Check nach Correspondents-Laden
+            if cancel_event.is_set():
+                _log("⚠ Job vor OCR-Start abgebrochen.")
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                                       "cancelled": True, "cancellable": False})
+                return
             docs = get_documents(date_from, date_to, tag_ids or [], date_field)
             docs = enrich_documents_with_correspondents(docs, correspondents)
             _log(f"{len(docs)} Dokumente geladen.")
+            # Abbruch-Check nach Dokumente-Laden
+            if cancel_event.is_set():
+                _log("⚠ Job vor OCR-Start abgebrochen.")
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                                       "cancelled": True, "cancellable": False})
+                return
 
         with job_lock:
             job_status["ocr_total"]      = len(docs)
@@ -349,12 +366,13 @@ def run_stage2(excel_path, year_label, docs=None,
         _log(f"✓ Stufe 2 abgeschlossen. {updated} Felder aktualisiert.{suffix}")
 
         with job_lock:
-            job_status.update({"done": True, "running": False, "cancelled": cancelled})
+            job_status.update({"done": True, "running": False,
+                               "cancelled": cancelled, "cancellable": False})
 
     except Exception as e:
         with job_lock:
             job_status.update({
-                "done": True, "running": False, "error": str(e),
+                "done": True, "running": False, "cancellable": False, "error": str(e),
                 "log": job_status["log"] + [f"✗ Fehler: {e}"],
             })
 
@@ -402,13 +420,13 @@ def api_status():
 
 @app.route("/api/cancel", methods=["POST"])
 def api_cancel():
-    """Issue #2: Laufenden OCR-Job abbrechen."""
+    """Issue #2: Laufenden Stufe-2-Job abbrechen (auch während Ladevorgang)."""
     with job_lock:
-        running = job_status.get("running")
-        stage   = job_status.get("stage")
-    if not running or stage != "stage2":
-        return jsonify({"error": "Kein OCR-Job aktiv."}), 400
+        cancellable = job_status.get("cancellable", False)
+    if not cancellable:
+        return jsonify({"error": "Kein abbrechbarer Job aktiv."}), 400
     cancel_event.set()
+    _log("⚠ Abbruch angefordert – wird nach aktuellem Schritt gestoppt…")
     return jsonify({"ok": True})
 
 
