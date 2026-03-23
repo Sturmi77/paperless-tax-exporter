@@ -412,14 +412,77 @@ body {
 /* ─── Stufe-Buttons ────────────────────────────────────────────────── */
 .actions-stacked {
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 10px;
+}
+.actions-stacked .btn {
+  justify-content: flex-start;
 }
 .btn-both {
   background: #1a7a8a;
 }
-.btn-both:hover {
+.btn-both:hover:not(:disabled) {
   background: #156878;
+}
+
+/* ─── Abbrechen-Bereich (Issue #2) ───────────────────────────────── */
+.cancel-area {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ─── Modal (Issue #4) ───────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal {
+  background: #fff;
+  border-radius: var(--radius);
+  box-shadow: 0 8px 40px rgba(0,0,0,.22);
+  padding: 32px;
+  max-width: 480px;
+  width: 100%;
+}
+.modal-icon { margin-bottom: 12px; }
+.modal-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--dark);
+  margin-bottom: 10px;
+}
+.modal-text {
+  font-size: .9rem;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.modal-text-warn {
+  color: #7b5200;
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 5px;
+  padding: 8px 12px;
+  margin-top: 10px;
+  font-size: .85rem;
+}
+.modal-details {
+  margin: 4px 0 8px 18px;
+  font-size: .88rem;
+  color: var(--text);
+  line-height: 1.8;
+}
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  justify-content: flex-end;
 }
 
 /* ─── OCR-Fortschritt ──────────────────────────────────────────────── */

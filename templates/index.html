@@ -55,6 +55,23 @@
           </div>
         </div>
 
+        <!-- Issue #3: Datumsfeld-Auswahl -->
+        <div class="field-group">
+          <label class="field-label">Datumsfeld
+            <span class="hint">Wonach soll gefiltert werden?</span>
+          </label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="date-field" value="created" checked />
+              Belegdatum <span class="radio-hint">(Datum auf der Rechnung)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="date-field" value="added" />
+              Scan-Datum <span class="radio-hint">(Import in Paperless)</span>
+            </label>
+          </div>
+        </div>
+
         <!-- Tags -->
         <div class="field-group">
           <label class="field-label">
@@ -80,20 +97,31 @@
         <!-- Aktions-Buttons -->
         <div class="actions actions-stacked">
 
-          <!-- Stufe 1 -->
-          <button class="btn btn-primary" id="btn-stage1" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polygon points="5 3 19 12 5 21 5 3"/>
-            </svg>
-            Stufe 1: PDFs &amp; Excel
-          </button>
-
-          <!-- Beide Stufen -->
+          <!-- Stufe 1 + 2 (Primär/Haupt-Aktion) -->
           <button class="btn btn-primary btn-both" id="btn-both" disabled>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
             Stufe 1 + 2: PDFs, Excel &amp; OCR
+          </button>
+
+          <!-- Stufe 1 -->
+          <button class="btn btn-primary" id="btn-stage1" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Stufe 1: PDFs &amp; Excel
+          </button>
+
+          <!-- Issue #1: Nur Excel -->
+          <button class="btn btn-secondary" id="btn-stage0" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>
+              <line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/>
+            </svg>
+            Nur Excel (ohne Download)
           </button>
 
           <!-- Stufe 2 standalone -->
@@ -146,6 +174,18 @@
             Neuer Export
           </button>
         </div>
+
+        <!-- Issue #2: Abbrechen-Button -->
+        <div class="cancel-area">
+          <button class="btn btn-danger hidden" id="btn-cancel">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+            OCR abbrechen
+          </button>
+        </div>
       </section>
 
     </main>
@@ -153,9 +193,29 @@
     <footer class="footer">
       <a href="http://www.kommevent.at/" target="_blank">komm|event</a>
       · Agentur für Kommunikation &amp; Events
-      · Steuerberater Export v2.0 · <span id="footer-year"></span>
+      · Steuerberater Export v2.1 · <span id="footer-year"></span>
     </footer>
 
+  </div>
+
+  <!-- Issue #4: Überschreib-Modal -->
+  <div id="overwrite-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e69800" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </div>
+      <h3 class="modal-title">Dateien bereits vorhanden</h3>
+      <p class="modal-text">Für diesen Zeitraum existieren bereits exportierte Dateien:</p>
+      <ul class="modal-details" id="overwrite-details"></ul>
+      <p class="modal-text modal-text-warn">Beim Fortfahren werden diese Dateien überschrieben. Manuelle Einträge in der Excel (Zahlungsdatum, Kennzahl) gehen verloren.</p>
+      <div class="modal-actions">
+        <button class="btn btn-danger" id="btn-overwrite-confirm">Überschreiben</button>
+        <button class="btn btn-secondary" id="btn-overwrite-cancel">Abbrechen</button>
+      </div>
+    </div>
   </div>
 
   <script>
