@@ -33,7 +33,7 @@ OCR-Text:
 {text}"""
 
 
-def _extract_relevant_text(content: str, max_chars: int = 2000) -> str:
+def _extract_relevant_text(content: str, max_chars: int = 1000) -> str:
     """
     Sendet nur den relevanten Teil des OCR-Textes ans LLM.
     Rechnungssummen und Absender stehen meist am Anfang und Ende.
@@ -47,7 +47,7 @@ def _extract_relevant_text(content: str, max_chars: int = 2000) -> str:
     return text[:max_chars]
 
 
-def extract_from_ocr(content: str, timeout: int = 60) -> dict:
+def extract_from_ocr(content: str, timeout: int = 180) -> dict:
     """
     Sendet OCR-Text an Ollama und gibt dict zurück:
     {
@@ -75,7 +75,8 @@ def extract_from_ocr(content: str, timeout: int = 60) -> dict:
                 "format": "json",   # Ollama structured output
                 "options": {
                     "temperature": 0.0,   # deterministisch
-                    "num_predict": 100,   # kurze Antwort reicht
+                    "num_predict": 150,   # kurze Antwort reicht
+                    "num_ctx": 1024,      # kleiner Context = schneller
                 }
             },
             timeout=timeout,
