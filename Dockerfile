@@ -10,10 +10,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # App-Dateien (ARG vor COPY erzwingt Cache-Invalidierung bei jedem Build)
+# COPY . . kopiert alle Dateien – keine manuelle Liste noetig bei neuen Modulen
 ARG CACHEBUST=1
-COPY app.py excel_export.py pdf_export.py llm_extract.py ./
-COPY templates/ templates/
-COPY static/ static/
+COPY . .
 
 # Ausgabe-Verzeichnis anlegen
 RUN mkdir -p /output
