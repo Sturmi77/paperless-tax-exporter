@@ -1,4 +1,4 @@
-/* ─── Paperless Tax Exporter · Frontend v2.2 ────────────────────────── */
+/* --- Paperless Tax Exporter · Frontend v2.2 -------------------------- */
 
 const $ = id => document.getElementById(id);
 
@@ -9,7 +9,7 @@ let pollTimer    = null;   // setTimeout-Handle (ersetzt setInterval)
 let pollRunning  = false;  // true solange ein fetch läuft → keine Parallelinstanz
 let lastLogCount = 0;
 
-// ─── Init ──────────────────────────────────────────────────────────────
+// --- Init --------------------------------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
   const fy = $("footer-year");
   if (fy) fy.textContent = new Date().getFullYear();
@@ -46,7 +46,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-// ─── Verbindungscheck ──────────────────────────────────────────────────
+// --- Verbindungscheck --------------------------------------------------
 async function checkConnection() {
   const badge = $("connection-status");
   try {
@@ -72,9 +72,9 @@ async function checkConnection() {
   }
 }
 
-// ─── Output-Pfad + Unterordner (Issue #9) ─────────────────────────────────
+// --- Output-Pfad + Unterordner (Issue #9) ---------------------------------
 // Allowlist-Regex (spiegelt Backend-Validierung exakt)
-const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;───
+const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;---
 async function updateOutputPath() {
   try {
     const res  = await fetch("/api/config");
@@ -117,7 +117,7 @@ function validateSubfolderInput() {
   return true;
 }
 
-// ─── Schnellauswahl Kalenderjahre ─────────────────────────────────────
+// --- Schnellauswahl Kalenderjahre -------------------------------------
 function buildYearButtons() {
   const container = $("quick-years");
   const thisYear  = new Date().getFullYear();
@@ -148,7 +148,7 @@ function getDateField() {
   return active ? active.dataset.value : 'created';
 }
 
-// ─── Datumsfeld-Hilfetext (Issue #10) ──────────────────────────────────────
+// --- Datumsfeld-Hilfetext (Issue #10) --------------------------------------
 const DATE_TOGGLE_HINTS = {
   created: 'Filtert nach dem Datum auf der Rechnung ("created" in Paperless)',
   added:   'Filtert nach dem Datum, an dem das Dokument in Paperless eingescannt wurde',
@@ -161,7 +161,7 @@ function updateDateToggleHint() {
   hintEl.textContent = DATE_TOGGLE_HINTS[field] || '';
 }
 
-// ─── createChipDropdown() Factory ────────────────────────────────────
+// --- createChipDropdown() Factory ------------------------------------
 /**
  * Erstellt ein wiederverwendbares Chip-Dropdown-Widget.
  *
@@ -283,7 +283,7 @@ function createChipDropdown(config) {
   };
 }
 
-// ─── Dokumenttypen laden (Issue #7) ───────────────────────────────────
+// --- Dokumenttypen laden (Issue #7) -----------------------------------
 async function loadDocumentTypes() {
   try {
     const res  = await fetch('/api/document-types');
@@ -317,7 +317,7 @@ async function loadDocumentTypes() {
   }
 }
 
-// ─── Tags laden ────────────────────────────────────────────────────────
+// --- Tags laden --------------------------------------------------------
 async function loadTags() {
   try {
     const healthRes  = await fetch("/api/health");
@@ -389,7 +389,7 @@ function renderTags() {
   selectedTags = tagDropdown.selectedIds;
 }
 
-// ─── Info-Text ─────────────────────────────────────────────────────────
+// --- Info-Text ---------------------------------------------------------
 function updateInfo() {
   const from = $("date-from").value;
   const to   = $("date-to").value;
@@ -421,7 +421,7 @@ function formatDuration(seconds) {
   return rm > 0 ? `${h} Std. ${rm} Min.` : `${h} Std.`;
 }
 
-// ─── Issue #4: Überschreib-Prüfung ────────────────────────────────────
+// --- Issue #4: Überschreib-Prüfung ------------------------------------
 async function checkExistsAndConfirm(yearLabel, mode) {
   // Nur bei Stufe 1 oder both relevant (nicht stage0, nicht stage2)
   if (mode === "stage2" || mode === "stage0") return true;
@@ -460,7 +460,7 @@ async function checkExistsAndConfirm(yearLabel, mode) {
   });
 }
 
-// ─── Export starten ────────────────────────────────────────────────────
+// --- Export starten ----------------------------------------------------
 async function startExport(mode) {
   const from = $("date-from").value;
   const to   = $("date-to").value;
@@ -544,7 +544,7 @@ async function startExport(mode) {
   schedulePoll();
 }
 
-// ─── Poll-Loop (setTimeout statt setInterval) ──────────────────────────
+// --- Poll-Loop (setTimeout statt setInterval) --------------------------
 // Garantiert: nächster Poll startet erst NACH Abschluss des aktuellen fetch.
 // Damit kann es keine zwei gleichzeitig laufenden pollStatus()-Instanzen geben,
 // die den Button-Zustand wechselseitig überschreiben (Blink-Ursache).
@@ -647,7 +647,7 @@ async function pollStatus() {
   schedulePoll(); // nächsten Tick erst hier einplanen → nie parallel
 }
 
-// ─── Issue #2: Job abbrechen ───────────────────────────────────────────
+// --- Issue #2: Job abbrechen -------------------------------------------
 async function cancelJob() {
   const btn = $("btn-cancel");
   btn.disabled  = true;
@@ -673,7 +673,7 @@ function logLine(text, type = "") {
   logBox.scrollTop = logBox.scrollHeight;
 }
 
-// ─── Reset ─────────────────────────────────────────────────────────────
+// --- Reset -------------------------------------------------------------
 function resetToConfig() {
   stopPoll();
   $("progress-card").classList.add("hidden");
