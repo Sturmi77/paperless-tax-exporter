@@ -55,17 +55,46 @@
             <input class="input" type="date" id="date-to" />
           </div>
         </div>
-        <div class="date-filter-toggle">
-          <button type="button" class="pill-btn pill-active" id="pill-created" data-value="created">
-            Belegdatum
-          </button>
-          <button type="button" class="pill-btn" id="pill-added" data-value="added">
-            Scan-Datum
-          </button>
+        <div class="date-filter-row">
+          <div class="date-filter-toggle" role="group" aria-label="Datumsfeld-Auswahl">
+            <button type="button" class="pill-btn pill-active" id="pill-created" data-value="created"
+                    aria-pressed="true">
+              Rechnungsdatum
+            </button>
+            <button type="button" class="pill-btn" id="pill-added" data-value="added"
+                    aria-pressed="false">
+              Scandatum
+            </button>
+          </div>
+          <span class="date-toggle-hint" id="date-toggle-hint"></span>
         </div>
 
-        <!-- 4. Tag-Auswahl (Chip-Dropdown) -->
+        <!-- 4a. Dokumententyp-Filter (Issue #7) -->
         <div class="field-group" style="margin-top: 20px;">
+          <label class="field-label">
+            Dokumententyp
+            <span class="hint">Kein Typ = alle Dokumenttypen im Zeitraum</span>
+          </label>
+          <div id="doctype-loading" class="tag-loading">Lade Dokumenttypen…</div>
+          <div id="doctype-error" class="error-msg hidden"></div>
+
+          <div class="tag-dropdown hidden" id="doctype-dropdown">
+            <div class="tag-input-wrap" id="doctype-input-wrap">
+              <div class="tag-chips" id="doctype-chips"></div>
+              <input
+                type="text"
+                class="tag-search"
+                id="doctype-search"
+                placeholder="Typ wählen…"
+                autocomplete="off"
+              />
+            </div>
+            <div class="tag-panel hidden" id="doctype-panel"></div>
+          </div>
+        </div>
+
+        <!-- 4b. Tag-Auswahl (Chip-Dropdown) -->
+        <div class="field-group" style="margin-top: 16px;">
           <label class="field-label">
             Tags filtern
             <span class="hint">Kein Tag = alle Dokumente im Zeitraum</span>
@@ -73,12 +102,9 @@
           <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
           <div id="tag-error" class="error-msg hidden"></div>
 
-          <!-- Chip-Dropdown (initial hidden, wird durch JS befüllt) -->
           <div class="tag-dropdown hidden" id="tag-dropdown">
             <div class="tag-input-wrap" id="tag-input-wrap">
-              <div class="tag-chips" id="tag-chips">
-                <!-- gewählte Tags erscheinen hier als Chips -->
-              </div>
+              <div class="tag-chips" id="tag-chips"></div>
               <input
                 type="text"
                 class="tag-search"
@@ -87,9 +113,7 @@
                 autocomplete="off"
               />
             </div>
-            <div class="tag-panel hidden" id="tag-panel">
-              <!-- Optionen werden per JS befüllt -->
-            </div>
+            <div class="tag-panel hidden" id="tag-panel"></div>
           </div>
         </div>
 
@@ -151,15 +175,31 @@
           </div>
         </details>
 
-        <!-- 7. Ausgabepfad (ans Ende) -->
+        <!-- 7. Ausgabepfad + Unterordner (Issue #9) -->
         <div class="field-group" style="margin-top: 12px;">
-          <label class="field-label">Ausgabepfad</label>
-          <div class="output-path">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span id="output-path-text">…</span>
+          <label class="field-label" for="subfolder-input">
+            Unterordner
+            <span class="hint">Optional – z.B. "2024-Q4" oder "Archiv"</span>
+          </label>
+          <div class="subfolder-row">
+            <div class="output-path output-path-base">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span id="output-path-text">…</span>
+            </div>
+            <input
+              type="text"
+              class="input input-subfolder"
+              id="subfolder-input"
+              placeholder="(kein Unterordner)"
+              maxlength="50"
+              autocomplete="off"
+              spellcheck="false"
+            />
           </div>
+          <div class="subfolder-error error-msg hidden" id="subfolder-error"></div>
+          <div class="subfolder-preview hidden" id="subfolder-preview"></div>
         </div>
       </section>
 
@@ -220,7 +260,7 @@
     <footer class="footer">
       <a href="http://www.kommevent.at/" target="_blank">komm|event</a>
       · Agentur für Kommunikation &amp; Events
-      · Steuerberater Export v2.1 · <span id="footer-year"></span>
+      · Steuerberater Export v2.2 · <span id="footer-year"></span>
     </footer>
 
   </div>

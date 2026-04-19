@@ -237,6 +237,32 @@ body {
   font-size: .88rem;
   font-family: 'Cascadia Code', 'Fira Mono', monospace;
 }
+/* ─── Unterordner-Eingabe (Issue #9) ──────────────────────────────── */
+.subfolder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.output-path-base {
+  flex: 0 0 auto;
+  max-width: 60%;
+}
+.input-subfolder {
+  flex: 1;
+  min-width: 120px;
+  max-width: 200px;
+  padding: 5px 10px;
+  font-size: .85rem;
+}
+.subfolder-preview {
+  font-size: .78rem;
+  color: var(--primary);
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+
 
 /* ─── Aktionen ─────────────────────────────────────────────────────── */
 .actions {
@@ -379,31 +405,48 @@ body {
 }
 
 /* ─── Pill-Toggle (Datumsfeld) ─────────────────────────────────────── */
-.date-filter-toggle {
+.date-filter-row {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-top: 8px;
 }
+.date-filter-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--border);
+  border-radius: 22px;
+  padding: 3px;
+}
+.date-toggle-hint {
+  font-size: .78rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  flex: 1;
+  min-width: 180px;
+}
 .pill-btn {
-  padding: 4px 14px;
-  border-radius: 20px;
-  border: 1.5px solid var(--border);
-  background: var(--surface);
+  padding: 4px 16px;
+  border-radius: 18px;
+  border: none;
+  background: transparent;
   color: var(--text-muted);
   font-size: .8rem;
   font-family: var(--font);
+  font-weight: 400;
   cursor: pointer;
   transition: all .15s;
+  white-space: nowrap;
 }
 .pill-btn.pill-active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
+  background: #fff;
+  color: var(--primary);
   font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,.15);
 }
 .pill-btn:hover:not(.pill-active) {
-  border-color: var(--primary);
-  color: var(--primary);
+  color: var(--text);
 }
 
 /* ─── Chip-Dropdown ────────────────────────────────────────────────── */

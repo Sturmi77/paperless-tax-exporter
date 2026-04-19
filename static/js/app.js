@@ -1,25 +1,28 @@
-/* ─── Paperless Tax Exporter · Frontend v2.1 ────────────────────────── */
+/* --- Paperless Tax Exporter · Frontend v2.2 -------------------------- */
 
 const $ = id => document.getElementById(id);
 
-let allTags      = [];
-let selectedTags = new Set();
+let allTags          = [];
+let selectedTags     = new Set();
+let doctypeDropdown  = null;  // createChipDropdown Handle für Dokumenttypen
 let pollTimer    = null;   // setTimeout-Handle (ersetzt setInterval)
 let pollRunning  = false;  // true solange ein fetch läuft → keine Parallelinstanz
 let lastLogCount = 0;
 
-// ─── Init ──────────────────────────────────────────────────────────────
+// --- Init --------------------------------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
   const fy = $("footer-year");
   if (fy) fy.textContent = new Date().getFullYear();
 
   buildYearButtons();
   loadTags();
+  loadDocumentTypes();
   checkConnection();
   updateOutputPath();
 
-  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); });
+  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); validateSubfolderInput(); });
   $("date-to").addEventListener("change",   () => { clearActiveYear(); updateInfo(); });
+  $("subfolder-input").addEventListener("input", validateSubfolderInput);
 
   $("btn-stage0").addEventListener("click",  () => startExport("stage0"));
   $("btn-stage1").addEventListener("click",  () => startExport("stage1"));
@@ -28,16 +31,22 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btn-cancel").addEventListener("click",  cancelJob);
   $("new-export-btn").addEventListener("click", resetUI);
 
-  // Pill-Toggle für Datumsfeld
+  // Segmented Control für Datumsfeld (Issue #10)
+  updateDateToggleHint(); // Hilfetext beim initialen Seitenload setzen
   document.querySelectorAll('.pill-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.pill-btn').forEach(b => b.classList.remove('pill-active'));
+      document.querySelectorAll('.pill-btn').forEach(b => {
+        b.classList.remove('pill-active');
+        b.setAttribute('aria-pressed', 'false');
+      });
       btn.classList.add('pill-active');
+      btn.setAttribute('aria-pressed', 'true');
+      updateDateToggleHint();
     });
   });
 });
 
-// ─── Verbindungscheck ──────────────────────────────────────────────────
+// --- Verbindungscheck --------------------------------------------------
 async function checkConnection() {
   const badge = $("connection-status");
   try {
@@ -63,7 +72,9 @@ async function checkConnection() {
   }
 }
 
-// ─── Output-Pfad ──────────────────────────────────────────────────────
+// --- Output-Pfad + Unterordner (Issue #9) ---------------------------------
+// Allowlist-Regex (spiegelt Backend-Validierung exakt)
+const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;
 async function updateOutputPath() {
   try {
     const res  = await fetch("/api/config");
@@ -76,7 +87,37 @@ async function updateOutputPath() {
   }
 }
 
-// ─── Schnellauswahl Kalenderjahre ─────────────────────────────────────
+function getSubfolder() {
+  return ($("subfolder-input").value || "").trim();
+}
+
+function validateSubfolderInput() {
+  const val     = getSubfolder();
+  const errEl   = $("subfolder-error");
+  const preview = $("subfolder-preview");
+
+  if (!val) {
+    errEl.classList.add("hidden");
+    preview.classList.add("hidden");
+    return true;
+  }
+
+  if (!SUBFOLDER_RE.test(val)) {
+    errEl.textContent = "Nur Buchstaben, Zahlen, _ und - erlaubt (keine Leerzeichen, Schrägstriche, Sonderzeichen).";
+    errEl.classList.remove("hidden");
+    preview.classList.add("hidden");
+    return false;
+  }
+
+  errEl.classList.add("hidden");
+  // Pfad-Vorschau: {Jahr}/{Unterordner}/Belege/
+  const year = $("date-from").value ? $("date-from").value.slice(0, 4) : "{Jahr}";
+  preview.textContent = `→ ${year}/${val}/Belege/`;
+  preview.classList.remove("hidden");
+  return true;
+}
+
+// --- Schnellauswahl Kalenderjahre -------------------------------------
 function buildYearButtons() {
   const container = $("quick-years");
   const thisYear  = new Date().getFullYear();
@@ -107,7 +148,176 @@ function getDateField() {
   return active ? active.dataset.value : 'created';
 }
 
-// ─── Tags laden ────────────────────────────────────────────────────────
+// --- Datumsfeld-Hilfetext (Issue #10) --------------------------------------
+const DATE_TOGGLE_HINTS = {
+  created: 'Filtert nach dem Datum auf der Rechnung ("created" in Paperless)',
+  added:   'Filtert nach dem Datum, an dem das Dokument in Paperless eingescannt wurde',
+};
+
+function updateDateToggleHint() {
+  const hintEl = $('date-toggle-hint');
+  if (!hintEl) return;
+  const field = getDateField();
+  hintEl.textContent = DATE_TOGGLE_HINTS[field] || '';
+}
+
+// --- createChipDropdown() Factory ------------------------------------
+/**
+ * Erstellt ein wiederverwendbares Chip-Dropdown-Widget.
+ *
+ * config: {
+ *   containerId:    ID des äußeren Wrapper-Elements (z.B. 'tag-dropdown')
+ *   inputWrapId:    ID des Klick-Bereichs mit Chips + Suchinput
+ *   chipsId:        ID des Chip-Containers
+ *   searchId:       ID des Suchinput-Elements
+ *   panelId:        ID der Dropdown-Liste
+ *   loadingId:      ID des Lade-Spinners (optional)
+ *   errorId:        ID des Fehler-Elements (optional)
+ *   items:          Array von { id, name } Objekten
+ *   onSelectionChange: callback(selectedIds: Set) – wird bei jeder Änderung aufgerufen
+ *   placeholder:    Placeholder-Text wenn nichts ausgewählt (default: 'Auswählen…')
+ * }
+ *
+ * Gibt zurück: { selectedIds: Set, refresh(items) }
+ */
+function createChipDropdown(config) {
+  const {
+    containerId, inputWrapId, chipsId, searchId, panelId,
+    loadingId, errorId,
+    items = [],
+    onSelectionChange = () => {},
+    placeholder = 'Auswählen…',
+  } = config;
+
+  const container  = $(containerId);
+  const inputWrap  = $(inputWrapId);
+  const chipsEl    = $(chipsId);
+  const searchEl   = $(searchId);
+  const panel      = $(panelId);
+
+  const selectedIds = new Set();
+  let currentItems  = [...items].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+
+  function renderPanel(filter = '') {
+    panel.innerHTML = '';
+    const f = filter.toLowerCase();
+    const visible = currentItems.filter(item => item.name.toLowerCase().includes(f));
+    if (visible.length === 0) {
+      panel.innerHTML = '<div class="tag-no-results">Keine Einträge gefunden.</div>';
+      return;
+    }
+    visible.forEach(item => {
+      const opt = document.createElement('div');
+      opt.className  = 'tag-option' + (selectedIds.has(item.id) ? ' selected' : '');
+      opt.dataset.id = item.id;
+      opt.innerHTML = `
+        <span class="tag-option-check">
+          ${selectedIds.has(item.id)
+            ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+            : ''}
+        </span>
+        ${item.name}
+      `;
+      opt.addEventListener('click', () => toggle(item.id));
+      panel.appendChild(opt);
+    });
+  }
+
+  function renderChips() {
+    chipsEl.innerHTML = '';
+    selectedIds.forEach(id => {
+      const item = currentItems.find(t => t.id === id);
+      if (!item) return;
+      const chip = document.createElement('div');
+      chip.className = 'tag-chip';
+      chip.innerHTML = `${item.name}<button class="tag-chip-remove" data-id="${id}" title="Entfernen">×</button>`;
+      chip.querySelector('.tag-chip-remove').addEventListener('click', e => {
+        e.stopPropagation();
+        toggle(id);
+      });
+      chipsEl.appendChild(chip);
+    });
+    searchEl.placeholder = selectedIds.size === 0 ? placeholder : '';
+    onSelectionChange(selectedIds);
+  }
+
+  function toggle(id) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+    renderChips();
+    renderPanel(searchEl.value);
+  }
+
+  function openPanel() {
+    renderPanel(searchEl.value);
+    panel.classList.remove('hidden');
+  }
+
+  function closePanel() {
+    panel.classList.add('hidden');
+    searchEl.value = '';
+  }
+
+  // Events
+  inputWrap.addEventListener('click', () => { searchEl.focus(); openPanel(); });
+  searchEl.addEventListener('input',  () => renderPanel(searchEl.value));
+  searchEl.addEventListener('focus',  () => openPanel());
+  document.addEventListener('click',  e => {
+    if (!container.contains(e.target)) closePanel();
+  });
+
+  // Initialer Render
+  if (loadingId) $(loadingId).classList.add('hidden');
+  if (container) container.classList.remove('hidden');
+  renderChips();
+
+  // Öffentliche API
+  return {
+    selectedIds,
+    /** Ersetzt die Item-Liste (z.B. nach asynchronem Nachladen) */
+    refresh(newItems) {
+      currentItems = [...newItems].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+      renderChips();
+      renderPanel(searchEl.value);
+    },
+  };
+}
+
+// --- Dokumenttypen laden (Issue #7) -----------------------------------
+async function loadDocumentTypes() {
+  try {
+    const res  = await fetch('/api/document-types');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const types = data.document_types || [];
+    if (types.length === 0) {
+      // Keine Typen vorhanden – Lade-Spinner ausblenden, kein Fehler
+      $('doctype-loading').classList.add('hidden');
+      return;
+    }
+
+    doctypeDropdown = createChipDropdown({
+      containerId:  'doctype-dropdown',
+      inputWrapId:  'doctype-input-wrap',
+      chipsId:      'doctype-chips',
+      searchId:     'doctype-search',
+      panelId:      'doctype-panel',
+      loadingId:    'doctype-loading',
+      items:        types,
+      placeholder:  'Typ wählen…',
+      onSelectionChange: () => updateInfo(),
+    });
+  } catch (err) {
+    $('doctype-loading').classList.add('hidden');
+    const errEl = $('doctype-error');
+    errEl.textContent = `Fehler beim Laden der Dokumenttypen: ${err.message}`;
+    errEl.classList.remove('hidden');
+  }
+}
+
+// --- Tags laden --------------------------------------------------------
 async function loadTags() {
   try {
     const healthRes  = await fetch("/api/health");
@@ -146,6 +356,9 @@ function disableButtons() {
   $("btn-stage2").disabled = true;
 }
 
+// tagDropdown-Handle für externen Zugriff (selectedTags sync)
+let tagDropdown = null;
+
 function renderTags() {
   $('tag-loading').classList.add('hidden');
 
@@ -155,97 +368,28 @@ function renderTags() {
     return;
   }
 
-  const dropdown  = $('tag-dropdown');
-  const inputWrap = $('tag-input-wrap');
-  const chipsEl   = $('tag-chips');
-  const searchEl  = $('tag-search');
-  const panel     = $('tag-panel');
-
-  dropdown.classList.remove('hidden');
-
-  const sorted = [...allTags].sort((a, b) => a.name.localeCompare(b.name, 'de'));
-
-  function renderPanel(filter = '') {
-    panel.innerHTML = '';
-    const f = filter.toLowerCase();
-    const visible = sorted.filter(t => t.name.toLowerCase().includes(f));
-    if (visible.length === 0) {
-      panel.innerHTML = '<div class="tag-no-results">Keine Tags gefunden.</div>';
-      return;
-    }
-    visible.forEach(tag => {
-      const opt = document.createElement('div');
-      opt.className = 'tag-option' + (selectedTags.has(tag.id) ? ' selected' : '');
-      opt.dataset.id = tag.id;
-      opt.innerHTML = `
-        <span class="tag-option-check">
-          ${selectedTags.has(tag.id) ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
-        </span>
-        ${tag.name}
-      `;
-      opt.addEventListener('click', () => toggleTag(tag.id, tag.name));
-      panel.appendChild(opt);
-    });
-  }
-
-  function renderChips() {
-    chipsEl.innerHTML = '';
-    selectedTags.forEach(id => {
-      const tag = allTags.find(t => t.id === id);
-      if (!tag) return;
-      const chip = document.createElement('div');
-      chip.className = 'tag-chip';
-      chip.innerHTML = `${tag.name}<button class="tag-chip-remove" data-id="${id}" title="Entfernen">×</button>`;
-      chip.querySelector('.tag-chip-remove').addEventListener('click', e => {
-        e.stopPropagation();
-        toggleTag(id, tag.name);
-      });
-      chipsEl.appendChild(chip);
-    });
-    if (selectedTags.size === 0) {
-      searchEl.placeholder = 'Tags wählen…';
-    } else {
-      searchEl.placeholder = '';
-    }
-    updateInfo();
-  }
-
-  function toggleTag(id, name) {
-    if (selectedTags.has(id)) {
-      selectedTags.delete(id);
-    } else {
-      selectedTags.add(id);
-    }
-    renderChips();
-    renderPanel(searchEl.value);
-  }
-
-  function openPanel() {
-    renderPanel(searchEl.value);
-    panel.classList.remove('hidden');
-  }
-
-  function closePanel() {
-    panel.classList.add('hidden');
-    searchEl.value = '';
-  }
-
-  inputWrap.addEventListener('click', () => {
-    searchEl.focus();
-    openPanel();
+  // createChipDropdown() Factory verwenden
+  tagDropdown = createChipDropdown({
+    containerId:  'tag-dropdown',
+    inputWrapId:  'tag-input-wrap',
+    chipsId:      'tag-chips',
+    searchId:     'tag-search',
+    panelId:      'tag-panel',
+    loadingId:    'tag-loading',
+    items:        allTags,
+    placeholder:  'Tags wählen…',
+    onSelectionChange: (ids) => {
+      // selectedTags (globale Variable) synchron halten
+      selectedTags = ids;
+      updateInfo();
+    },
   });
 
-  searchEl.addEventListener('input', () => renderPanel(searchEl.value));
-  searchEl.addEventListener('focus', () => openPanel());
-
-  document.addEventListener('click', e => {
-    if (!dropdown.contains(e.target)) closePanel();
-  });
-
-  renderChips();
+  // selectedTags auf das gleiche Set zeigen lassen
+  selectedTags = tagDropdown.selectedIds;
 }
 
-// ─── Info-Text ─────────────────────────────────────────────────────────
+// --- Info-Text ---------------------------------------------------------
 function updateInfo() {
   const from = $("date-from").value;
   const to   = $("date-to").value;
@@ -277,7 +421,7 @@ function formatDuration(seconds) {
   return rm > 0 ? `${h} Std. ${rm} Min.` : `${h} Std.`;
 }
 
-// ─── Issue #4: Überschreib-Prüfung ────────────────────────────────────
+// --- Issue #4: Überschreib-Prüfung ------------------------------------
 async function checkExistsAndConfirm(yearLabel, mode) {
   // Nur bei Stufe 1 oder both relevant (nicht stage0, nicht stage2)
   if (mode === "stage2" || mode === "stage0") return true;
@@ -316,7 +460,7 @@ async function checkExistsAndConfirm(yearLabel, mode) {
   });
 }
 
-// ─── Export starten ────────────────────────────────────────────────────
+// --- Export starten ----------------------------------------------------
 async function startExport(mode) {
   const from = $("date-from").value;
   const to   = $("date-to").value;
@@ -325,10 +469,20 @@ async function startExport(mode) {
     return;
   }
 
-  const tagIds    = Array.from(selectedTags);
-  const tagNames  = tagIds.map(id => { const t = allTags.find(t => t.id === id); return t ? t.name : String(id); });
-  const yearLabel = from.slice(0, 4);
-  const dateField = getDateField();
+  const tagIds          = Array.from(selectedTags);
+  const tagNames        = tagIds.map(id => { const t = allTags.find(t => t.id === id); return t ? t.name : String(id); });
+  const doctypeIds      = doctypeDropdown ? Array.from(doctypeDropdown.selectedIds) : [];
+  const yearLabel       = from.slice(0, 4);
+  const dateField       = getDateField();
+  const subfolder       = getSubfolder();
+
+  // Clientseitige Subfolder-Validierung (Issue #9)
+  if (subfolder && !SUBFOLDER_RE.test(subfolder)) {
+    $("subfolder-error").textContent = "Ungültiger Unterordner – bitte korrigieren.";
+    $("subfolder-error").classList.remove("hidden");
+    $("subfolder-input").focus();
+    return;
+  }
 
   // Issue #4: Überschreib-Prüfung (false=Abbrechen, true=Überschreiben, "append"=Nur neue)
   const confirmed = await checkExistsAndConfirm(yearLabel, mode);
@@ -368,6 +522,8 @@ async function startExport(mode) {
         date_from: from, date_to: to,
         date_field:  dateField,
         tag_ids: tagIds, tag_names: tagNames,
+        document_type_ids: doctypeIds,
+        subfolder,
         year_label: yearLabel, mode,
         append_mode: appendMode,
       }),
@@ -388,7 +544,7 @@ async function startExport(mode) {
   schedulePoll();
 }
 
-// ─── Poll-Loop (setTimeout statt setInterval) ──────────────────────────
+// --- Poll-Loop (setTimeout statt setInterval) --------------------------
 // Garantiert: nächster Poll startet erst NACH Abschluss des aktuellen fetch.
 // Damit kann es keine zwei gleichzeitig laufenden pollStatus()-Instanzen geben,
 // die den Button-Zustand wechselseitig überschreiben (Blink-Ursache).
@@ -491,7 +647,7 @@ async function pollStatus() {
   schedulePoll(); // nächsten Tick erst hier einplanen → nie parallel
 }
 
-// ─── Issue #2: Job abbrechen ───────────────────────────────────────────
+// --- Issue #2: Job abbrechen -------------------------------------------
 async function cancelJob() {
   const btn = $("btn-cancel");
   btn.disabled  = true;
@@ -517,7 +673,7 @@ function logLine(text, type = "") {
   logBox.scrollTop = logBox.scrollHeight;
 }
 
-// ─── Reset ─────────────────────────────────────────────────────────────
+// --- Reset -------------------------------------------------------------
 function resetToConfig() {
   stopPoll();
   $("progress-card").classList.add("hidden");
