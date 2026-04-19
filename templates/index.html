@@ -55,13 +55,18 @@
             <input class="input" type="date" id="date-to" />
           </div>
         </div>
-        <div class="date-filter-toggle">
-          <button type="button" class="pill-btn pill-active" id="pill-created" data-value="created">
-            Belegdatum
-          </button>
-          <button type="button" class="pill-btn" id="pill-added" data-value="added">
-            Scan-Datum
-          </button>
+        <div class="date-filter-row">
+          <div class="date-filter-toggle" role="group" aria-label="Datumsfeld-Auswahl">
+            <button type="button" class="pill-btn pill-active" id="pill-created" data-value="created"
+                    aria-pressed="true">
+              Rechnungsdatum
+            </button>
+            <button type="button" class="pill-btn" id="pill-added" data-value="added"
+                    aria-pressed="false">
+              Scandatum
+            </button>
+          </div>
+          <span class="date-toggle-hint" id="date-toggle-hint"></span>
         </div>
 
         <!-- 4. Tag-Auswahl (Chip-Dropdown) -->
@@ -220,7 +225,7 @@
     <footer class="footer">
       <a href="http://www.kommevent.at/" target="_blank">komm|event</a>
       · Agentur für Kommunikation &amp; Events
-      · Steuerberater Export v2.1 · <span id="footer-year"></span>
+      · Steuerberater Export v2.2 · <span id="footer-year"></span>
     </footer>
 
   </div>
