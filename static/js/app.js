@@ -2,8 +2,9 @@
 
 const $ = id => document.getElementById(id);
 
-let allTags      = [];
-let selectedTags = new Set();
+let allTags          = [];
+let selectedTags     = new Set();
+let doctypeDropdown  = null;  // createChipDropdown Handle für Dokumenttypen
 let pollTimer    = null;   // setTimeout-Handle (ersetzt setInterval)
 let pollRunning  = false;  // true solange ein fetch läuft → keine Parallelinstanz
 let lastLogCount = 0;
@@ -15,6 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   buildYearButtons();
   loadTags();
+  loadDocumentTypes();
   checkConnection();
   updateOutputPath();
 
@@ -248,6 +250,40 @@ function createChipDropdown(config) {
   };
 }
 
+// ─── Dokumenttypen laden (Issue #7) ───────────────────────────────────
+async function loadDocumentTypes() {
+  try {
+    const res  = await fetch('/api/document-types');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const types = data.document_types || [];
+    if (types.length === 0) {
+      // Keine Typen vorhanden – Lade-Spinner ausblenden, kein Fehler
+      $('doctype-loading').classList.add('hidden');
+      return;
+    }
+
+    doctypeDropdown = createChipDropdown({
+      containerId:  'doctype-dropdown',
+      inputWrapId:  'doctype-input-wrap',
+      chipsId:      'doctype-chips',
+      searchId:     'doctype-search',
+      panelId:      'doctype-panel',
+      loadingId:    'doctype-loading',
+      items:        types,
+      placeholder:  'Typ wählen…',
+      onSelectionChange: () => updateInfo(),
+    });
+  } catch (err) {
+    $('doctype-loading').classList.add('hidden');
+    const errEl = $('doctype-error');
+    errEl.textContent = `Fehler beim Laden der Dokumenttypen: ${err.message}`;
+    errEl.classList.remove('hidden');
+  }
+}
+
 // ─── Tags laden ────────────────────────────────────────────────────────
 async function loadTags() {
   try {
@@ -400,10 +436,11 @@ async function startExport(mode) {
     return;
   }
 
-  const tagIds    = Array.from(selectedTags);
-  const tagNames  = tagIds.map(id => { const t = allTags.find(t => t.id === id); return t ? t.name : String(id); });
-  const yearLabel = from.slice(0, 4);
-  const dateField = getDateField();
+  const tagIds          = Array.from(selectedTags);
+  const tagNames        = tagIds.map(id => { const t = allTags.find(t => t.id === id); return t ? t.name : String(id); });
+  const doctypeIds      = doctypeDropdown ? Array.from(doctypeDropdown.selectedIds) : [];
+  const yearLabel       = from.slice(0, 4);
+  const dateField       = getDateField();
 
   // Issue #4: Überschreib-Prüfung (false=Abbrechen, true=Überschreiben, "append"=Nur neue)
   const confirmed = await checkExistsAndConfirm(yearLabel, mode);
@@ -443,6 +480,7 @@ async function startExport(mode) {
         date_from: from, date_to: to,
         date_field:  dateField,
         tag_ids: tagIds, tag_names: tagNames,
+        document_type_ids: doctypeIds,
         year_label: yearLabel, mode,
         append_mode: appendMode,
       }),
