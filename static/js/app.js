@@ -28,11 +28,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btn-cancel").addEventListener("click",  cancelJob);
   $("new-export-btn").addEventListener("click", resetUI);
 
-  // Pill-Toggle für Datumsfeld
+  // Segmented Control für Datumsfeld (Issue #10)
+  updateDateToggleHint(); // Hilfetext beim initialen Seitenload setzen
   document.querySelectorAll('.pill-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.pill-btn').forEach(b => b.classList.remove('pill-active'));
+      document.querySelectorAll('.pill-btn').forEach(b => {
+        b.classList.remove('pill-active');
+        b.setAttribute('aria-pressed', 'false');
+      });
       btn.classList.add('pill-active');
+      btn.setAttribute('aria-pressed', 'true');
+      updateDateToggleHint();
     });
   });
 });
@@ -105,6 +111,19 @@ function clearActiveYear() {
 function getDateField() {
   const active = document.querySelector('.pill-btn.pill-active');
   return active ? active.dataset.value : 'created';
+}
+
+// ─── Datumsfeld-Hilfetext (Issue #10) ──────────────────────────────────────
+const DATE_TOGGLE_HINTS = {
+  created: 'Filtert nach dem Datum auf der Rechnung ("created" in Paperless)',
+  added:   'Filtert nach dem Datum, an dem das Dokument in Paperless eingescannt wurde',
+};
+
+function updateDateToggleHint() {
+  const hintEl = $('date-toggle-hint');
+  if (!hintEl) return;
+  const field = getDateField();
+  hintEl.textContent = DATE_TOGGLE_HINTS[field] || '';
 }
 
 // ─── createChipDropdown() Factory ────────────────────────────────────
