@@ -74,7 +74,7 @@ async function checkConnection() {
 
 // --- Output-Pfad + Unterordner (Issue #9) ---------------------------------
 // Allowlist-Regex (spiegelt Backend-Validierung exakt)
-const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;---
+const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;
 async function updateOutputPath() {
   try {
     const res  = await fetch("/api/config");
