@@ -1,5 +1,6 @@
 import os
 import re
+import re
 import io
 import json
 import requests
@@ -63,6 +64,25 @@ job_status = {
 }
 job_lock     = threading.Lock()
 cancel_event = threading.Event()   # Issue #2: Abbruch-Steuerung
+
+
+def _validate_subfolder(name: str) -> str:
+    """
+    Allowlist-Validierung für Unterordner-Namen (Issue #9).
+    Erlaubt: Buchstaben, Zahlen, Unterstriche, Bindestriche (1-50 Zeichen).
+    Leerer String → kein Unterordner (akzeptiert).
+    """
+    if not name:
+        return ""
+    name = name.strip()
+    if not name:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,50}", name):
+        raise ValueError(
+            f"Ungültiger Unterordner-Name: '{name}'. "
+            "Nur Buchstaben, Zahlen, _ und - erlaubt (max. 50 Zeichen)."
+        )
+    return name
 
 
 def _job_status_reset(stage):
@@ -191,7 +211,7 @@ def enrich_documents_with_correspondents(documents, correspondents):
 
 # ── Stufe 0: Nur Excel (Issue #1) ─────────────────────────────────────
 def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="created",
-               document_type_ids=None):
+               document_type_ids=None, subfolder: str = ""):
     """Erstellt nur die Excel-Datei – kein PDF-Download, kein OCR."""
     global job_status
     try:
@@ -202,6 +222,8 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
         _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
         if document_type_ids:
             _log(f"Dokumenttyp-Filter: {len(document_type_ids)} Typ(en)")
+        if subfolder:
+            _log(f"Unterordner: {subfolder}")
 
         _log("Lade Correspondents aus Paperless…")
         correspondents = get_all_correspondents()
@@ -229,7 +251,7 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
         _log("Erstelle Excel-Datei…")
         excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
         excel_path     = os.path.join(export_folder, excel_filename)
-        create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH)
+        create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH, subfolder=subfolder)
         _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
@@ -248,7 +270,8 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
 
 # ── Stufe 1: Download + Excel ──────────────────────────────────────────
 def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
-              date_field="created", append_mode=False):
+               date_field="created", append_mode=False, document_type_ids=None,
+               subfolder: str = ""):
     global job_status
     try:
         _job_status_reset("stage1")
@@ -257,6 +280,8 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         if tag_names:
             _log(f"Tags: {', '.join(tag_names)}")
         _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
+        if subfolder:
+            _log(f"Unterordner: {subfolder}")
 
         _log("Lade Correspondents aus Paperless…")
         correspondents = get_all_correspondents()
@@ -274,7 +299,11 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
             return
 
         export_folder  = os.path.join(OUTPUT_DIR, year_label)
-        pdf_folder     = os.path.join(export_folder, "Belege")
+        # Subfolder: <year>/<subfolder>/Belege/ wenn gesetzt, sonst <year>/Belege/
+        if subfolder:
+            pdf_folder = os.path.join(export_folder, subfolder, "Belege")
+        else:
+            pdf_folder = os.path.join(export_folder, "Belege")
         excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
         excel_path     = os.path.join(export_folder, excel_filename)
         _assert_output_path(export_folder)
@@ -309,12 +338,12 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         if append_mode and os.path.exists(excel_path):
             _log("Hänge neue Zeilen ans Excel an…")
             added = append_to_excel(docs_to_process, pdf_map, excel_path, year_label,
-                                    unc_base=WINDOWS_UNC_PATH)
+                                    unc_base=WINDOWS_UNC_PATH, subfolder=subfolder)
             _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt.")
         else:
             _log("Erstelle Excel-Datei…")
             create_excel(docs_to_process, pdf_map, excel_path, year_label,
-                         unc_base=WINDOWS_UNC_PATH)
+                         unc_base=WINDOWS_UNC_PATH, subfolder=subfolder)
             _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
@@ -336,7 +365,7 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
 # ── Stufe 2: OCR-Analyse via Ollama ───────────────────────────────────
 def run_stage2(excel_path, year_label, docs=None,
                date_from=None, date_to=None, tag_ids=None, date_field="created",
-               document_type_ids=None):
+               document_type_ids=None, subfolder: str = ""):
     """Issue #2: cancel_event wird nach jedem Dokument geprüft."""
     global job_status
     try:
@@ -417,7 +446,8 @@ def run_stage2(excel_path, year_label, docs=None,
 
         # Auch bei Abbruch: bisherige Ergebnisse sichern
         _log("Schreibe OCR-Ergebnisse ins Excel…")
-        updated   = update_excel_with_ocr(excel_path, ocr_results, WINDOWS_UNC_PATH, year_label)
+        updated   = update_excel_with_ocr(excel_path, ocr_results, WINDOWS_UNC_PATH, year_label,
+                                          subfolder=subfolder)
         cancelled = cancel_event.is_set()
         suffix    = " (abgebrochen)" if cancelled else ""
         _log(f"✓ Stufe 2 abgeschlossen. {updated} Felder aktualisiert.{suffix}")
@@ -535,6 +565,11 @@ def api_start():
     date_field          = data.get("date_field", "created")  # Issue #3
     append_mode         = data.get("append_mode", False)      # Issue #4: nur neue hinzufügen
     document_type_ids   = data.get("document_type_ids", []) or []  # Issue #7
+    subfolder_raw       = data.get("subfolder", "") or ""              # Issue #9
+    try:
+        subfolder = _validate_subfolder(subfolder_raw)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     if not date_from or not date_to:
         return jsonify({"error": "Bitte Datumsbereich angeben."}), 400
@@ -546,7 +581,7 @@ def api_start():
         thread = threading.Thread(
             target=run_stage0,
             args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
-            kwargs={"document_type_ids": document_type_ids},
+            kwargs={"document_type_ids": document_type_ids, "subfolder": subfolder},
             daemon=True,
         )
     elif mode == "stage2":
@@ -563,13 +598,14 @@ def api_start():
         thread = threading.Thread(
             target=run_stage2,
             args=(excel_path, year_label, None, date_from, date_to, tag_ids, date_field),
-            kwargs={"document_type_ids": document_type_ids},
+            kwargs={"document_type_ids": document_type_ids, "subfolder": subfolder},
             daemon=True,
         )
     elif mode == "both":
         def run_both():
             run_stage1(date_from, date_to, tag_ids, tag_names, year_label, date_field,
-                       append_mode=append_mode, document_type_ids=document_type_ids)
+                       append_mode=append_mode, document_type_ids=document_type_ids,
+                       subfolder=subfolder)
             with job_lock:
                 ep  = job_status.get("excel_path")
                 err = job_status.get("error")
@@ -578,14 +614,15 @@ def api_start():
                     job_status.update({"running": True, "done": False})
                 cancel_event.clear()  # Sicherstellen dass kein alter Abbruch-State hängt
                 run_stage2(ep, year_label, None, date_from, date_to, tag_ids, date_field,
-                           document_type_ids=document_type_ids)
+                           document_type_ids=document_type_ids, subfolder=subfolder)
         thread = threading.Thread(target=run_both, daemon=True)
     else:
         # stage1
         thread = threading.Thread(
             target=run_stage1,
             args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
-            kwargs={"append_mode": append_mode, "document_type_ids": document_type_ids},
+            kwargs={"append_mode": append_mode, "document_type_ids": document_type_ids,
+                    "subfolder": subfolder},
             daemon=True,
         )
 

@@ -175,15 +175,31 @@
           </div>
         </details>
 
-        <!-- 7. Ausgabepfad (ans Ende) -->
+        <!-- 7. Ausgabepfad + Unterordner (Issue #9) -->
         <div class="field-group" style="margin-top: 12px;">
-          <label class="field-label">Ausgabepfad</label>
-          <div class="output-path">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span id="output-path-text">…</span>
+          <label class="field-label" for="subfolder-input">
+            Unterordner
+            <span class="hint">Optional – z.B. "2024-Q4" oder "Archiv"</span>
+          </label>
+          <div class="subfolder-row">
+            <div class="output-path output-path-base">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span id="output-path-text">…</span>
+            </div>
+            <input
+              type="text"
+              class="input input-subfolder"
+              id="subfolder-input"
+              placeholder="(kein Unterordner)"
+              maxlength="50"
+              autocomplete="off"
+              spellcheck="false"
+            />
           </div>
+          <div class="subfolder-error error-msg hidden" id="subfolder-error"></div>
+          <div class="subfolder-preview hidden" id="subfolder-preview"></div>
         </div>
       </section>
 

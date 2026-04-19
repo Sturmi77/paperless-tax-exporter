@@ -20,8 +20,9 @@ document.addEventListener("DOMContentLoaded", () => {
   checkConnection();
   updateOutputPath();
 
-  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); });
+  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); validateSubfolderInput(); });
   $("date-to").addEventListener("change",   () => { clearActiveYear(); updateInfo(); });
+  $("subfolder-input").addEventListener("input", validateSubfolderInput);
 
   $("btn-stage0").addEventListener("click",  () => startExport("stage0"));
   $("btn-stage1").addEventListener("click",  () => startExport("stage1"));
@@ -71,7 +72,9 @@ async function checkConnection() {
   }
 }
 
-// ─── Output-Pfad ──────────────────────────────────────────────────────
+// ─── Output-Pfad + Unterordner (Issue #9) ─────────────────────────────────
+// Allowlist-Regex (spiegelt Backend-Validierung exakt)
+const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;───
 async function updateOutputPath() {
   try {
     const res  = await fetch("/api/config");
@@ -82,6 +85,36 @@ async function updateOutputPath() {
   } catch {
     $("output-path-text").textContent = "(konfigurierter Ausgabepfad auf dem NAS)";
   }
+}
+
+function getSubfolder() {
+  return ($("subfolder-input").value || "").trim();
+}
+
+function validateSubfolderInput() {
+  const val     = getSubfolder();
+  const errEl   = $("subfolder-error");
+  const preview = $("subfolder-preview");
+
+  if (!val) {
+    errEl.classList.add("hidden");
+    preview.classList.add("hidden");
+    return true;
+  }
+
+  if (!SUBFOLDER_RE.test(val)) {
+    errEl.textContent = "Nur Buchstaben, Zahlen, _ und - erlaubt (keine Leerzeichen, Schrägstriche, Sonderzeichen).";
+    errEl.classList.remove("hidden");
+    preview.classList.add("hidden");
+    return false;
+  }
+
+  errEl.classList.add("hidden");
+  // Pfad-Vorschau: {Jahr}/{Unterordner}/Belege/
+  const year = $("date-from").value ? $("date-from").value.slice(0, 4) : "{Jahr}";
+  preview.textContent = `→ ${year}/${val}/Belege/`;
+  preview.classList.remove("hidden");
+  return true;
 }
 
 // ─── Schnellauswahl Kalenderjahre ─────────────────────────────────────
@@ -441,6 +474,15 @@ async function startExport(mode) {
   const doctypeIds      = doctypeDropdown ? Array.from(doctypeDropdown.selectedIds) : [];
   const yearLabel       = from.slice(0, 4);
   const dateField       = getDateField();
+  const subfolder       = getSubfolder();
+
+  // Clientseitige Subfolder-Validierung (Issue #9)
+  if (subfolder && !SUBFOLDER_RE.test(subfolder)) {
+    $("subfolder-error").textContent = "Ungültiger Unterordner – bitte korrigieren.";
+    $("subfolder-error").classList.remove("hidden");
+    $("subfolder-input").focus();
+    return;
+  }
 
   // Issue #4: Überschreib-Prüfung (false=Abbrechen, true=Überschreiben, "append"=Nur neue)
   const confirmed = await checkExistsAndConfirm(yearLabel, mode);
@@ -481,6 +523,7 @@ async function startExport(mode) {
         date_field:  dateField,
         tag_ids: tagIds, tag_names: tagNames,
         document_type_ids: doctypeIds,
+        subfolder,
         year_label: yearLabel, mode,
         append_mode: appendMode,
       }),
