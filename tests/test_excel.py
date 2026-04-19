@@ -10,7 +10,7 @@ import tempfile
 # Projektpfad
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from excel_export import _build_unc_path, create_excel, append_to_excel
+from excel_export import _build_unc_path, _build_cell_formula, create_excel, append_to_excel
 
 
 # ---------------------------------------------------------------------------
@@ -126,18 +126,19 @@ class TestCreateExcel:
         wb.close()
 
     def test_no_subfolder_no_subfolder_in_hyperlink(self, tmp_path):
-        """Ohne Subfolder darf 'Archiv' oder ähnliches NICHT im Pfad stehen."""
+        """Ohne Subfolder: UNC-Modus muss Jahr + Belege im Pfad enthalten."""
         import openpyxl
         out = str(tmp_path / "test_no_sub.xlsx")
         create_excel(
             self.SAMPLE_DOCS, self.PDF_MAP, out, "2024",
-            unc_base=self.UNC_BASE
+            unc_base=self.UNC_BASE,
+            hyperlink_mode="unc",
         )
         wb = openpyxl.load_workbook(out)
         ws = wb["Rechnungsaufstellung"]
         cell_j = ws.cell(row=5, column=10)
         val = str(cell_j.value or "")
-        # Standard-Pfad muss direkt \2024\Belege\ enthalten
+        # UNC-Pfad muss Jahr und Belege-Ordner enthalten, aber keinen doppelten Separator
         assert r"\2024\Belege\\" not in val  # kein doppelter Separator
         assert "2024" in val
         assert "Belege" in val
@@ -184,15 +185,114 @@ class TestAppendToExcel:
 
 
 # ---------------------------------------------------------------------------
-# Platzhalter für Schritt 4 (Issue #8) – CELL-Formel Tests
+# Tests: _build_cell_formula() (Issue #8)
+# ---------------------------------------------------------------------------
+
+class TestBuildCellFormula:
+    def test_formula_starts_with_hyperlink(self):
+        formula = _build_cell_formula(r"Belege\test.pdf")
+        assert formula.startswith("=HYPERLINK(")
+
+    def test_formula_contains_cell_filename(self):
+        formula = _build_cell_formula(r"Belege\test.pdf")
+        assert 'CELL("filename")' in formula
+
+    def test_formula_display_name_is_filename(self):
+        formula = _build_cell_formula(r"Belege\test.pdf")
+        assert '"test.pdf"' in formula
+
+    def test_formula_with_subfolder(self):
+        formula = _build_cell_formula(r"Archiv\Belege\test.pdf")
+        assert 'CELL("filename")' in formula
+        assert '"test.pdf"' in formula
+
+    def test_formula_is_dynamic_no_static_path(self):
+        """Wichtigste Eigenschaft: kein statischer absoluter Pfad eingebettet."""
+        formula = _build_cell_formula(r"Belege\test.pdf")
+        assert "C:\\" not in formula
+        assert "\\\\SynologyDS923" not in formula
+
+
+# ---------------------------------------------------------------------------
+# Tests: create_excel() – CELL-Formel vs. UNC (Issue #8)
 # ---------------------------------------------------------------------------
 
 class TestCellFormulaHyperlinks:
-    """
-    TODO (Schritt 4 / Issue #8):
-    - test_hyperlink_mode_cell_generates_formula()
-    - test_hyperlink_mode_unc_generates_absolute_path()
-    - test_include_text_path_adds_column_k()
-    - test_cell_formula_contains_filename()
-    """
-    pass
+    SAMPLE_DOCS = [
+        {"id": 1, "archive_serial_number": "0001", "created": "2024-01-10",
+         "correspondent_name": "Firma A", "title": "Rechnung 1",
+         "document_type": 1, "document_type_name": "Rechnung"},
+    ]
+    PDF_MAP = {1: "0001_Test.pdf"}
+    UNC_BASE = r"\\SynologyDS923\downloads\steuerberater"
+
+    def test_hyperlink_mode_cell_generates_formula(self, tmp_path):
+        """hyperlink_mode='cell' muss CELL("filename")-Formel in Spalte J erzeugen."""
+        import openpyxl
+        out = str(tmp_path / "cell_mode.xlsx")
+        create_excel(self.SAMPLE_DOCS, self.PDF_MAP, out, "2024",
+                     unc_base=self.UNC_BASE, hyperlink_mode="cell")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Rechnungsaufstellung"]
+        cell_j = ws.cell(row=5, column=10)
+        val = str(cell_j.value or "")
+        assert 'CELL("filename")' in val
+        assert "=HYPERLINK(" in val
+        wb.close()
+
+    def test_hyperlink_mode_unc_generates_absolute_path(self, tmp_path):
+        """hyperlink_mode='unc' muss absoluten UNC-Pfad erzeugen (kein CELL)."""
+        import openpyxl
+        out = str(tmp_path / "unc_mode.xlsx")
+        create_excel(self.SAMPLE_DOCS, self.PDF_MAP, out, "2024",
+                     unc_base=self.UNC_BASE, hyperlink_mode="unc")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Rechnungsaufstellung"]
+        cell_j = ws.cell(row=5, column=10)
+        val = str(cell_j.value or "")
+        assert "SynologyDS923" in val
+        assert 'CELL("filename")' not in val
+        wb.close()
+
+    def test_include_text_path_adds_column_k(self, tmp_path):
+        """include_text_path=True muss Spalte K mit UNC-Pfad erzeugen."""
+        import openpyxl
+        out = str(tmp_path / "text_path.xlsx")
+        create_excel(self.SAMPLE_DOCS, self.PDF_MAP, out, "2024",
+                     unc_base=self.UNC_BASE, include_text_path=True)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Rechnungsaufstellung"]
+        # Header Zeile 4, Spalte K
+        header_k = ws.cell(row=4, column=11).value
+        assert header_k is not None and "Pfad" in str(header_k)
+        # Daten Zeile 5, Spalte K
+        data_k = ws.cell(row=5, column=11).value
+        assert data_k is not None
+        assert "SynologyDS923" in str(data_k)
+        wb.close()
+
+    def test_no_text_path_column_k_empty(self, tmp_path):
+        """include_text_path=False (default) darf keine Spalte K erzeugen."""
+        import openpyxl
+        out = str(tmp_path / "no_text_path.xlsx")
+        create_excel(self.SAMPLE_DOCS, self.PDF_MAP, out, "2024",
+                     unc_base=self.UNC_BASE, include_text_path=False)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Rechnungsaufstellung"]
+        data_k = ws.cell(row=5, column=11).value
+        assert data_k is None
+        wb.close()
+
+    def test_cell_formula_no_static_path_embedded(self, tmp_path):
+        """Wichtigste Eigenschaft: CELL-Formel enthält keinen statischen Server-Pfad."""
+        import openpyxl
+        out = str(tmp_path / "no_static.xlsx")
+        create_excel(self.SAMPLE_DOCS, self.PDF_MAP, out, "2024",
+                     unc_base=self.UNC_BASE, hyperlink_mode="cell")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Rechnungsaufstellung"]
+        cell_j = ws.cell(row=5, column=10)
+        val = str(cell_j.value or "")
+        # Kein statischer NAS-Pfad in der Formel
+        assert "SynologyDS923" not in val
+        wb.close()

@@ -1,6 +1,5 @@
 import os
 import re
-import re
 import io
 import json
 import requests
@@ -30,6 +29,12 @@ OUTPUT_DIR       = os.path.realpath(os.environ.get("OUTPUT_DIR", "/output"))
 OLLAMA_URL       = os.environ.get("OLLAMA_URL",       "http://192.168.178.115:11434")
 OLLAMA_MODEL     = os.environ.get("OLLAMA_MODEL",     "qwen2.5:3b")
 WINDOWS_UNC_PATH = os.environ.get("WINDOWS_UNC_PATH", r"\\SynologyDS923\downloads\steuerberater")
+# Issue #8: Hyperlink-Modus
+# "cell"  = CELL("filename")-Formel → portabel, funktioniert nach Ordner-Verschiebung
+# "unc"   = absoluter UNC-Pfad (bisheriges Verhalten, Fallback)
+HYPERLINK_MODE    = os.environ.get("HYPERLINK_MODE", "cell").lower()
+# Issue #8: Spalte K mit kopierbarem UNC-Pfad (plain text) einblenden
+INCLUDE_TEXT_PATH = os.environ.get("INCLUDE_TEXT_PATH", "false").lower() == "true"
 
 os.environ.setdefault("OLLAMA_URL",   OLLAMA_URL)
 os.environ.setdefault("OLLAMA_MODEL", OLLAMA_MODEL)
@@ -251,7 +256,9 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
         _log("Erstelle Excel-Datei…")
         excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
         excel_path     = os.path.join(export_folder, excel_filename)
-        create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH, subfolder=subfolder)
+        create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH,
+                      subfolder=subfolder, hyperlink_mode=HYPERLINK_MODE,
+                      include_text_path=INCLUDE_TEXT_PATH)
         _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
@@ -338,12 +345,16 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         if append_mode and os.path.exists(excel_path):
             _log("Hänge neue Zeilen ans Excel an…")
             added = append_to_excel(docs_to_process, pdf_map, excel_path, year_label,
-                                    unc_base=WINDOWS_UNC_PATH, subfolder=subfolder)
+                                    unc_base=WINDOWS_UNC_PATH, subfolder=subfolder,
+                                    hyperlink_mode=HYPERLINK_MODE,
+                                    include_text_path=INCLUDE_TEXT_PATH)
             _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt.")
         else:
             _log("Erstelle Excel-Datei…")
             create_excel(docs_to_process, pdf_map, excel_path, year_label,
-                         unc_base=WINDOWS_UNC_PATH, subfolder=subfolder)
+                         unc_base=WINDOWS_UNC_PATH, subfolder=subfolder,
+                         hyperlink_mode=HYPERLINK_MODE,
+                         include_text_path=INCLUDE_TEXT_PATH)
             _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:

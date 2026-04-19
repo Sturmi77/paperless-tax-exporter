@@ -49,6 +49,9 @@ COLUMNS = [
     ("Dateiname / Beleg",                   38.0,  "left"),
 ]
 
+# Optionale Spalte K (INCLUDE_TEXT_PATH=true)
+COLUMN_TEXT_PATH = ("Pfad (kopierbar)", 52.0, "left")
+
 DATE_FORMAT   = "DD.MM.YYYY"
 NUMBER_FORMAT = '#,##0.00 "€"'
 
@@ -102,18 +105,47 @@ def _build_unc_path(unc_base, year_label, filename, subfolder: str = ""):
     return f"{base}\\{year_label}\\Belege\\{filename}"
 
 
+def _build_cell_formula(subfolder_path: str) -> str:
+    r"""
+    Baut eine portable CELL("filename")-Hyperlink-Formel.
+
+    Die Formel berechnet den Hyperlink-Pfad dynamisch zur Laufzeit:
+      LEFT(CELL("filename"), FIND("[", CELL("filename"))-1) -> Ordnerpfad der Excel-Datei
+      & "Belege\\datei.pdf" -> relativer Unterordner + Dateiname
+
+    Dadurch friert Excel den Pfad NICHT ein - er bleibt nach Ordner-Verschiebung gueltig.
+
+    WICHTIG: Funktioniert nur wenn die Datei bereits gespeichert ist.
+    In einer neuen, ungespeicherten Datei gibt CELL("filename") "" zurueck.
+
+    subfolder_path: relativer Teilpfad nach dem Ordner der Excel-Datei
+                    z.B. "Belege\\0012_Telekom.pdf"
+    """
+    # Backslashes in der Formel müssen als \\ (4 Backslashes) codiert werden,
+    # damit Excel 2 Backslashes interpretiert → ein Backslash im Pfad
+    escaped = subfolder_path.replace("\\", "\\\\")
+    return (
+        f'=HYPERLINK('
+        f'LEFT(CELL("filename"),FIND("[",CELL("filename"))-1)&"{escaped}",'
+        f'"{subfolder_path.split(chr(92))[-1]}")'
+    )
+
+
 def create_excel(documents, pdf_map, output_path, year_label,
-                 unc_base=None, ocr_results=None, subfolder: str = ""):
+                 unc_base=None, ocr_results=None, subfolder: str = "",
+                 hyperlink_mode: str = "cell", include_text_path: bool = False):
     """
     Erstellt die Excel-Datei im Steuerberater-Format (Stufe 1).
 
-    documents:   Liste von Paperless-Dokumenten (API-Dicts)
-    pdf_map:     {doc_id: filename_in_pdf_folder}
-    output_path: Zielpfad der .xlsx-Datei
-    year_label:  z.B. "2024"
-    unc_base:    Windows-UNC-Pfad Basis (optional)
-    ocr_results: {doc_id: {"absender": ..., "betrag": ...}} (optional, Stufe 2)
-    subfolder:   optionaler Unterordner unterhalb des Jahres-Ordners (Allowlist-validiert, default="")
+    documents:         Liste von Paperless-Dokumenten (API-Dicts)
+    pdf_map:           {doc_id: filename_in_pdf_folder}
+    output_path:       Zielpfad der .xlsx-Datei
+    year_label:        z.B. "2024"
+    unc_base:          Windows-UNC-Pfad Basis (optional)
+    ocr_results:       {doc_id: {"absender": ..., "betrag": ...}} (optional, Stufe 2)
+    subfolder:         optionaler Unterordner (Allowlist-validiert, default="")
+    hyperlink_mode:    "cell" = CELL()-Formel (portabel); "unc" = absoluter UNC-Pfad (Issue #8)
+    include_text_path: True = Spalte K mit kopierbarem UNC-Pfad (Issue #8)
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -133,7 +165,10 @@ def create_excel(documents, pdf_map, output_path, year_label,
 
     # ── Zeile 4: Spaltenheader ───────────────────────────────────────────
     ws.row_dimensions[4].height = 36
-    for col_idx, (header, width, align) in enumerate(COLUMNS, start=1):
+    active_columns = list(COLUMNS)
+    if include_text_path:
+        active_columns.append(COLUMN_TEXT_PATH)
+    for col_idx, (header, width, align) in enumerate(active_columns, start=1):
         _header_cell(ws, 4, col_idx, header, align)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
@@ -209,25 +244,43 @@ def create_excel(documents, pdf_map, output_path, year_label,
         _data_cell(ws, row, 9, None, align="right",
                    number_fmt=NUMBER_FORMAT, bg=COLOR_EMPTY_BG)
 
-        # J: Dateiname / Hyperlink
+        # J: Dateiname / Hyperlink (Issue #8: CELL-Formel oder UNC)
         filename = pdf_map.get(doc_id, "")
-        if filename and unc_base:
-            unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
-            # Excel HYPERLINK Formel
-            cell_j = ws.cell(
-                row=row, column=10,
-                value=f'=HYPERLINK("{unc_path}","{filename}")'
-            )
+        if filename:
+            if hyperlink_mode == "cell":
+                # CELL("filename")-Formel: portabel, funktioniert nach Ordner-Verschiebung
+                if subfolder:
+                    rel_path = f"{subfolder}\\Belege\\{filename}"
+                else:
+                    rel_path = f"Belege\\{filename}"
+                formula = _build_cell_formula(rel_path)
+            elif unc_base:
+                # Absoluter UNC-Pfad (Fallback / HYPERLINK_MODE=unc)
+                unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
+                formula  = f'=HYPERLINK("{unc_path}","{filename}")'
+            else:
+                formula = filename
+
+            cell_j = ws.cell(row=row, column=10, value=formula)
             cell_j.font      = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment = Alignment(horizontal="left", vertical="center")
             cell_j.border    = BORDER
+
+            # Spalte K: kopierbarer UNC-Pfad (INCLUDE_TEXT_PATH=true)
+            if include_text_path and unc_base:
+                unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
+                cell_k = ws.cell(row=row, column=11, value=unc_path)
+                cell_k.font      = Font(size=9, color="666666")
+                cell_k.alignment = Alignment(horizontal="left", vertical="center")
+                cell_k.border    = BORDER
         else:
             _data_cell(ws, row, 10, filename, align="left")
 
     last_data_row = data_start_row + len(sorted_docs) - 1
 
     # ── Excel-Tabelle (Tabelle1) ──────────────────────────────────────────
-    table_ref = f"A4:{get_column_letter(len(COLUMNS))}{last_data_row}"
+    num_cols  = len(COLUMNS) + (1 if include_text_path else 0)
+    table_ref = f"A4:{get_column_letter(num_cols)}{last_data_row}"
     table = Table(displayName="Tabelle1", ref=table_ref)
     table.tableStyleInfo = TableStyleInfo(
         name="TableStyleLight1",
@@ -356,15 +409,18 @@ def get_existing_doc_ids(excel_path):
 
 
 def append_to_excel(new_documents, pdf_map, excel_path, year_label,
-                    unc_base=None, subfolder: str = ""):
+                    unc_base=None, subfolder: str = "",
+                    hyperlink_mode: str = "cell", include_text_path: bool = False):
     """
     Hängt neue Dokumente an ein bestehendes Excel an.
     Bestehende Zeilen werden nicht verändert.
     Gibt die Anzahl neu angehängter Zeilen zurück.
 
-    new_documents: Liste von Paperless-Dokumenten die noch NICHT im Excel sind
-    pdf_map:       {doc_id: filename}
-    subfolder:     optionaler Unterordner unterhalb des Jahres-Ordners (default="")
+    new_documents:     Liste von Paperless-Dokumenten die noch NICHT im Excel sind
+    pdf_map:           {doc_id: filename}
+    subfolder:         optionaler Unterordner (default="")
+    hyperlink_mode:    "cell" = CELL()-Formel; "unc" = absoluter UNC-Pfad (Issue #8)
+    include_text_path: Spalte K mit kopierbarem UNC-Pfad (Issue #8)
     """
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
@@ -436,17 +492,32 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label,
         _data_cell(ws, row, 9, None, align="right",
                    number_fmt=NUMBER_FORMAT, bg=COLOR_EMPTY_BG)
 
-        # J: Dateiname / Hyperlink
+        # J: Dateiname / Hyperlink (Issue #8)
         filename = pdf_map.get(doc_id, "")
-        if filename and unc_base:
-            unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
-            cell_j = ws.cell(
-                row=row, column=10,
-                value=f'=HYPERLINK("{unc_path}","{filename}")'
-            )
+        if filename:
+            if hyperlink_mode == "cell":
+                if subfolder:
+                    rel_path = f"{subfolder}\\Belege\\{filename}"
+                else:
+                    rel_path = f"Belege\\{filename}"
+                formula = _build_cell_formula(rel_path)
+            elif unc_base:
+                unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
+                formula  = f'=HYPERLINK("{unc_path}","{filename}")'
+            else:
+                formula = filename
+
+            cell_j = ws.cell(row=row, column=10, value=formula)
             cell_j.font      = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment = Alignment(horizontal="left", vertical="center")
             cell_j.border    = BORDER
+
+            if include_text_path and unc_base:
+                unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
+                cell_k = ws.cell(row=row, column=11, value=unc_path)
+                cell_k.font      = Font(size=9, color="666666")
+                cell_k.alignment = Alignment(horizontal="left", vertical="center")
+                cell_k.border    = BORDER
         else:
             _data_cell(ws, row, 10, filename, align="left")
 
