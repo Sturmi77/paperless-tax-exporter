@@ -1,4 +1,4 @@
-/* ─── Paperless Tax Exporter · Frontend v2.1 ────────────────────────── */
+/* ─── Paperless Tax Exporter · Frontend v2.2 ────────────────────────── */
 
 const $ = id => document.getElementById(id);
 
@@ -107,6 +107,128 @@ function getDateField() {
   return active ? active.dataset.value : 'created';
 }
 
+// ─── createChipDropdown() Factory ────────────────────────────────────
+/**
+ * Erstellt ein wiederverwendbares Chip-Dropdown-Widget.
+ *
+ * config: {
+ *   containerId:    ID des äußeren Wrapper-Elements (z.B. 'tag-dropdown')
+ *   inputWrapId:    ID des Klick-Bereichs mit Chips + Suchinput
+ *   chipsId:        ID des Chip-Containers
+ *   searchId:       ID des Suchinput-Elements
+ *   panelId:        ID der Dropdown-Liste
+ *   loadingId:      ID des Lade-Spinners (optional)
+ *   errorId:        ID des Fehler-Elements (optional)
+ *   items:          Array von { id, name } Objekten
+ *   onSelectionChange: callback(selectedIds: Set) – wird bei jeder Änderung aufgerufen
+ *   placeholder:    Placeholder-Text wenn nichts ausgewählt (default: 'Auswählen…')
+ * }
+ *
+ * Gibt zurück: { selectedIds: Set, refresh(items) }
+ */
+function createChipDropdown(config) {
+  const {
+    containerId, inputWrapId, chipsId, searchId, panelId,
+    loadingId, errorId,
+    items = [],
+    onSelectionChange = () => {},
+    placeholder = 'Auswählen…',
+  } = config;
+
+  const container  = $(containerId);
+  const inputWrap  = $(inputWrapId);
+  const chipsEl    = $(chipsId);
+  const searchEl   = $(searchId);
+  const panel      = $(panelId);
+
+  const selectedIds = new Set();
+  let currentItems  = [...items].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+
+  function renderPanel(filter = '') {
+    panel.innerHTML = '';
+    const f = filter.toLowerCase();
+    const visible = currentItems.filter(item => item.name.toLowerCase().includes(f));
+    if (visible.length === 0) {
+      panel.innerHTML = '<div class="tag-no-results">Keine Einträge gefunden.</div>';
+      return;
+    }
+    visible.forEach(item => {
+      const opt = document.createElement('div');
+      opt.className  = 'tag-option' + (selectedIds.has(item.id) ? ' selected' : '');
+      opt.dataset.id = item.id;
+      opt.innerHTML = `
+        <span class="tag-option-check">
+          ${selectedIds.has(item.id)
+            ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+            : ''}
+        </span>
+        ${item.name}
+      `;
+      opt.addEventListener('click', () => toggle(item.id));
+      panel.appendChild(opt);
+    });
+  }
+
+  function renderChips() {
+    chipsEl.innerHTML = '';
+    selectedIds.forEach(id => {
+      const item = currentItems.find(t => t.id === id);
+      if (!item) return;
+      const chip = document.createElement('div');
+      chip.className = 'tag-chip';
+      chip.innerHTML = `${item.name}<button class="tag-chip-remove" data-id="${id}" title="Entfernen">×</button>`;
+      chip.querySelector('.tag-chip-remove').addEventListener('click', e => {
+        e.stopPropagation();
+        toggle(id);
+      });
+      chipsEl.appendChild(chip);
+    });
+    searchEl.placeholder = selectedIds.size === 0 ? placeholder : '';
+    onSelectionChange(selectedIds);
+  }
+
+  function toggle(id) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+    renderChips();
+    renderPanel(searchEl.value);
+  }
+
+  function openPanel() {
+    renderPanel(searchEl.value);
+    panel.classList.remove('hidden');
+  }
+
+  function closePanel() {
+    panel.classList.add('hidden');
+    searchEl.value = '';
+  }
+
+  // Events
+  inputWrap.addEventListener('click', () => { searchEl.focus(); openPanel(); });
+  searchEl.addEventListener('input',  () => renderPanel(searchEl.value));
+  searchEl.addEventListener('focus',  () => openPanel());
+  document.addEventListener('click',  e => {
+    if (!container.contains(e.target)) closePanel();
+  });
+
+  // Initialer Render
+  if (loadingId) $(loadingId).classList.add('hidden');
+  if (container) container.classList.remove('hidden');
+  renderChips();
+
+  // Öffentliche API
+  return {
+    selectedIds,
+    /** Ersetzt die Item-Liste (z.B. nach asynchronem Nachladen) */
+    refresh(newItems) {
+      currentItems = [...newItems].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+      renderChips();
+      renderPanel(searchEl.value);
+    },
+  };
+}
+
 // ─── Tags laden ────────────────────────────────────────────────────────
 async function loadTags() {
   try {
@@ -146,6 +268,9 @@ function disableButtons() {
   $("btn-stage2").disabled = true;
 }
 
+// tagDropdown-Handle für externen Zugriff (selectedTags sync)
+let tagDropdown = null;
+
 function renderTags() {
   $('tag-loading').classList.add('hidden');
 
@@ -155,94 +280,25 @@ function renderTags() {
     return;
   }
 
-  const dropdown  = $('tag-dropdown');
-  const inputWrap = $('tag-input-wrap');
-  const chipsEl   = $('tag-chips');
-  const searchEl  = $('tag-search');
-  const panel     = $('tag-panel');
-
-  dropdown.classList.remove('hidden');
-
-  const sorted = [...allTags].sort((a, b) => a.name.localeCompare(b.name, 'de'));
-
-  function renderPanel(filter = '') {
-    panel.innerHTML = '';
-    const f = filter.toLowerCase();
-    const visible = sorted.filter(t => t.name.toLowerCase().includes(f));
-    if (visible.length === 0) {
-      panel.innerHTML = '<div class="tag-no-results">Keine Tags gefunden.</div>';
-      return;
-    }
-    visible.forEach(tag => {
-      const opt = document.createElement('div');
-      opt.className = 'tag-option' + (selectedTags.has(tag.id) ? ' selected' : '');
-      opt.dataset.id = tag.id;
-      opt.innerHTML = `
-        <span class="tag-option-check">
-          ${selectedTags.has(tag.id) ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
-        </span>
-        ${tag.name}
-      `;
-      opt.addEventListener('click', () => toggleTag(tag.id, tag.name));
-      panel.appendChild(opt);
-    });
-  }
-
-  function renderChips() {
-    chipsEl.innerHTML = '';
-    selectedTags.forEach(id => {
-      const tag = allTags.find(t => t.id === id);
-      if (!tag) return;
-      const chip = document.createElement('div');
-      chip.className = 'tag-chip';
-      chip.innerHTML = `${tag.name}<button class="tag-chip-remove" data-id="${id}" title="Entfernen">×</button>`;
-      chip.querySelector('.tag-chip-remove').addEventListener('click', e => {
-        e.stopPropagation();
-        toggleTag(id, tag.name);
-      });
-      chipsEl.appendChild(chip);
-    });
-    if (selectedTags.size === 0) {
-      searchEl.placeholder = 'Tags wählen…';
-    } else {
-      searchEl.placeholder = '';
-    }
-    updateInfo();
-  }
-
-  function toggleTag(id, name) {
-    if (selectedTags.has(id)) {
-      selectedTags.delete(id);
-    } else {
-      selectedTags.add(id);
-    }
-    renderChips();
-    renderPanel(searchEl.value);
-  }
-
-  function openPanel() {
-    renderPanel(searchEl.value);
-    panel.classList.remove('hidden');
-  }
-
-  function closePanel() {
-    panel.classList.add('hidden');
-    searchEl.value = '';
-  }
-
-  inputWrap.addEventListener('click', () => {
-    searchEl.focus();
-    openPanel();
+  // createChipDropdown() Factory verwenden
+  tagDropdown = createChipDropdown({
+    containerId:  'tag-dropdown',
+    inputWrapId:  'tag-input-wrap',
+    chipsId:      'tag-chips',
+    searchId:     'tag-search',
+    panelId:      'tag-panel',
+    loadingId:    'tag-loading',
+    items:        allTags,
+    placeholder:  'Tags wählen…',
+    onSelectionChange: (ids) => {
+      // selectedTags (globale Variable) synchron halten
+      selectedTags = ids;
+      updateInfo();
+    },
   });
 
-  searchEl.addEventListener('input', () => renderPanel(searchEl.value));
-  searchEl.addEventListener('focus', () => openPanel());
-
-  document.addEventListener('click', e => {
-    if (!dropdown.contains(e.target)) closePanel();
-  });
-
-  renderChips();
+  // selectedTags auf das gleiche Set zeigen lassen
+  selectedTags = tagDropdown.selectedIds;
 }
 
 // ─── Info-Text ─────────────────────────────────────────────────────────

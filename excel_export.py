@@ -83,23 +83,27 @@ def _make_comment(text):
         return None
 
 
-def _build_unc_path(unc_base, year_label, filename):
+def _build_unc_path(unc_base, year_label, filename, subfolder: str = ""):
     """
     Baut Windows-UNC-Pfad für Excel-Hyperlink.
     unc_base:   z.B. \\\\SynologyDS923\\downloads\\steuerberater
     year_label: z.B. 2024
     filename:   z.B. 0012_Telekom.pdf
-    Ergebnis:   \\\\SynologyDS923\\downloads\\steuerberater\\2024\\Belege\\0012_Telekom.pdf
+    subfolder:  optionaler Unterordner (Allowlist-validiert, default="")
+    Ergebnis (ohne subfolder): \\\\SynologyDS923\\downloads\\steuerberater\\2024\\Belege\\0012_Telekom.pdf
+    Ergebnis (mit subfolder):  \\\\SynologyDS923\\downloads\\steuerberater\\2024\\Archiv\\Belege\\0012_Telekom.pdf
     """
     if not unc_base or not filename:
         return filename or ""
     # Backslashes normalisieren
     base = unc_base.rstrip("\\")
+    if subfolder:
+        return f"{base}\\{year_label}\\{subfolder}\\Belege\\{filename}"
     return f"{base}\\{year_label}\\Belege\\{filename}"
 
 
 def create_excel(documents, pdf_map, output_path, year_label,
-                 unc_base=None, ocr_results=None):
+                 unc_base=None, ocr_results=None, subfolder: str = ""):
     """
     Erstellt die Excel-Datei im Steuerberater-Format (Stufe 1).
 
@@ -109,6 +113,7 @@ def create_excel(documents, pdf_map, output_path, year_label,
     year_label:  z.B. "2024"
     unc_base:    Windows-UNC-Pfad Basis (optional)
     ocr_results: {doc_id: {"absender": ..., "betrag": ...}} (optional, Stufe 2)
+    subfolder:   optionaler Unterordner unterhalb des Jahres-Ordners (Allowlist-validiert, default="")
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -207,7 +212,7 @@ def create_excel(documents, pdf_map, output_path, year_label,
         # J: Dateiname / Hyperlink
         filename = pdf_map.get(doc_id, "")
         if filename and unc_base:
-            unc_path = _build_unc_path(unc_base, year_label, filename)
+            unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
             # Excel HYPERLINK Formel
             cell_j = ws.cell(
                 row=row, column=10,
@@ -248,12 +253,14 @@ def create_excel(documents, pdf_map, output_path, year_label,
     return output_path
 
 
-def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label):
+def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
+                          subfolder: str = ""):
     """
     Stufe 2: Öffnet bestehendes Excel und trägt OCR-Ergebnisse ein.
     Überschreibt nur leere oder bereits gelbe Felder (schützt manuelle Einträge).
 
     ocr_results: {doc_id: {"absender": str|None, "betrag": float|None}}
+    subfolder:   optionaler Unterordner unterhalb des Jahres-Ordners (default="")
     """
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
@@ -320,7 +327,7 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label):
         cell_j = ws.cell(row=row_num, column=10)
         filename = str(cell_j.value or "")
         if filename and unc_base and not str(filename).startswith("=HYPERLINK"):
-            unc_path = _build_unc_path(unc_base, year_label, filename)
+            unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
             cell_j.value      = f'=HYPERLINK("{unc_path}","{filename}")'
             cell_j.font       = Font(size=10, color=COLOR_HYPERLINK, underline="single")
             cell_j.alignment  = Alignment(horizontal="left", vertical="center")
@@ -348,7 +355,8 @@ def get_existing_doc_ids(excel_path):
     return ids
 
 
-def append_to_excel(new_documents, pdf_map, excel_path, year_label, unc_base=None):
+def append_to_excel(new_documents, pdf_map, excel_path, year_label,
+                    unc_base=None, subfolder: str = ""):
     """
     Hängt neue Dokumente an ein bestehendes Excel an.
     Bestehende Zeilen werden nicht verändert.
@@ -356,6 +364,7 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label, unc_base=Non
 
     new_documents: Liste von Paperless-Dokumenten die noch NICHT im Excel sind
     pdf_map:       {doc_id: filename}
+    subfolder:     optionaler Unterordner unterhalb des Jahres-Ordners (default="")
     """
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
@@ -430,7 +439,7 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label, unc_base=Non
         # J: Dateiname / Hyperlink
         filename = pdf_map.get(doc_id, "")
         if filename and unc_base:
-            unc_path = _build_unc_path(unc_base, year_label, filename)
+            unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
             cell_j = ws.cell(
                 row=row, column=10,
                 value=f'=HYPERLINK("{unc_path}","{filename}")'
