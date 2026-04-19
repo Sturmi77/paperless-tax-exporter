@@ -69,8 +69,32 @@
           <span class="date-toggle-hint" id="date-toggle-hint"></span>
         </div>
 
-        <!-- 4. Tag-Auswahl (Chip-Dropdown) -->
+        <!-- 4a. Dokumententyp-Filter (Issue #7) -->
         <div class="field-group" style="margin-top: 20px;">
+          <label class="field-label">
+            Dokumententyp
+            <span class="hint">Kein Typ = alle Dokumenttypen im Zeitraum</span>
+          </label>
+          <div id="doctype-loading" class="tag-loading">Lade Dokumenttypen…</div>
+          <div id="doctype-error" class="error-msg hidden"></div>
+
+          <div class="tag-dropdown hidden" id="doctype-dropdown">
+            <div class="tag-input-wrap" id="doctype-input-wrap">
+              <div class="tag-chips" id="doctype-chips"></div>
+              <input
+                type="text"
+                class="tag-search"
+                id="doctype-search"
+                placeholder="Typ wählen…"
+                autocomplete="off"
+              />
+            </div>
+            <div class="tag-panel hidden" id="doctype-panel"></div>
+          </div>
+        </div>
+
+        <!-- 4b. Tag-Auswahl (Chip-Dropdown) -->
+        <div class="field-group" style="margin-top: 16px;">
           <label class="field-label">
             Tags filtern
             <span class="hint">Kein Tag = alle Dokumente im Zeitraum</span>
@@ -78,12 +102,9 @@
           <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
           <div id="tag-error" class="error-msg hidden"></div>
 
-          <!-- Chip-Dropdown (initial hidden, wird durch JS befüllt) -->
           <div class="tag-dropdown hidden" id="tag-dropdown">
             <div class="tag-input-wrap" id="tag-input-wrap">
-              <div class="tag-chips" id="tag-chips">
-                <!-- gewählte Tags erscheinen hier als Chips -->
-              </div>
+              <div class="tag-chips" id="tag-chips"></div>
               <input
                 type="text"
                 class="tag-search"
@@ -92,9 +113,7 @@
                 autocomplete="off"
               />
             </div>
-            <div class="tag-panel hidden" id="tag-panel">
-              <!-- Optionen werden per JS befüllt -->
-            </div>
+            <div class="tag-panel hidden" id="tag-panel"></div>
           </div>
         </div>
 

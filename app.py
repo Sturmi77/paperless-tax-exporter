@@ -134,7 +134,28 @@ def get_all_correspondents():
     return result
 
 
-def get_documents(date_from, date_to, tag_ids, date_field="created"):
+def get_all_document_types():
+    """Holt alle Document Types als Liste von {id, name}."""
+    types = []
+    url   = "/api/document_types/"
+    while url:
+        data = paperless_get(url)
+        for t in data.get("results", []):
+            types.append({"id": t["id"], "name": t["name"]})
+        next_url = data.get("next")
+        if next_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(next_url)
+            url = parsed.path + ("?" + parsed.query if parsed.query else "")
+            if not url.startswith("/api/"):
+                url = None
+        else:
+            url = None
+    return types
+
+
+def get_documents(date_from, date_to, tag_ids, date_field="created",
+                  document_type_ids=None):
     """Issue #3: date_field = 'created' (Belegdatum) oder 'added' (Scan-Datum)."""
     documents = []
     params = {
@@ -144,6 +165,8 @@ def get_documents(date_from, date_to, tag_ids, date_field="created"):
     }
     if tag_ids:
         params["tags__id__all"] = ",".join(str(t) for t in tag_ids)
+    if document_type_ids:
+        params["document_type__id__in"] = ",".join(str(t) for t in document_type_ids)
 
     path = "/api/documents/"
     page = 1
@@ -167,7 +190,8 @@ def enrich_documents_with_correspondents(documents, correspondents):
 
 
 # ── Stufe 0: Nur Excel (Issue #1) ─────────────────────────────────────
-def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="created"):
+def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="created",
+               document_type_ids=None):
     """Erstellt nur die Excel-Datei – kein PDF-Download, kein OCR."""
     global job_status
     try:
@@ -176,13 +200,15 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
         if tag_names:
             _log(f"Tags: {', '.join(tag_names)}")
         _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
+        if document_type_ids:
+            _log(f"Dokumenttyp-Filter: {len(document_type_ids)} Typ(en)")
 
         _log("Lade Correspondents aus Paperless…")
         correspondents = get_all_correspondents()
         _log(f"{len(correspondents)} Correspondents geladen.")
 
         _log("Lade Dokumentenliste…")
-        docs = get_documents(date_from, date_to, tag_ids, date_field)
+        docs = get_documents(date_from, date_to, tag_ids, date_field, document_type_ids)
         docs = enrich_documents_with_correspondents(docs, correspondents)
         _log(f"{len(docs)} Dokumente gefunden.")
 
@@ -237,7 +263,7 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         _log(f"{len(correspondents)} Correspondents geladen.")
 
         _log("Lade Dokumentenliste…")
-        docs = get_documents(date_from, date_to, tag_ids, date_field)
+        docs = get_documents(date_from, date_to, tag_ids, date_field, document_type_ids)
         docs = enrich_documents_with_correspondents(docs, correspondents)
         _log(f"{len(docs)} Dokumente gefunden.")
 
@@ -309,7 +335,8 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
 
 # ── Stufe 2: OCR-Analyse via Ollama ───────────────────────────────────
 def run_stage2(excel_path, year_label, docs=None,
-               date_from=None, date_to=None, tag_ids=None, date_field="created"):
+               date_from=None, date_to=None, tag_ids=None, date_field="created",
+               document_type_ids=None):
     """Issue #2: cancel_event wird nach jedem Dokument geprüft."""
     global job_status
     try:
@@ -332,7 +359,7 @@ def run_stage2(excel_path, year_label, docs=None,
                     job_status.update({"done": True, "running": False,
                                        "cancelled": True, "cancellable": False})
                 return
-            docs = get_documents(date_from, date_to, tag_ids or [], date_field)
+            docs = get_documents(date_from, date_to, tag_ids or [], date_field, document_type_ids)
             docs = enrich_documents_with_correspondents(docs, correspondents)
             _log(f"{len(docs)} Dokumente geladen.")
             # Abbruch-Check nach Dokumente-Laden
@@ -421,6 +448,14 @@ def api_tags():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/document-types")
+def api_document_types():
+    try:
+        return jsonify({"document_types": get_all_document_types()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/status")
 def api_status():
     with job_lock:
@@ -490,15 +525,16 @@ def api_start():
         if job_status["running"]:
             return jsonify({"error": "Ein Job läuft bereits."}), 400
 
-    data        = request.json
-    date_from   = data.get("date_from")
-    date_to     = data.get("date_to")
-    tag_ids     = data.get("tag_ids", [])
-    tag_names   = data.get("tag_names", [])
-    year_label  = data.get("year_label", date_from[:4] if date_from else "export")
-    mode        = data.get("mode", "stage1")   # "stage0"|"stage1"|"stage2"|"both"
-    date_field  = data.get("date_field", "created")  # Issue #3
-    append_mode = data.get("append_mode", False)      # Issue #4: nur neue hinzufügen
+    data                = request.json
+    date_from           = data.get("date_from")
+    date_to             = data.get("date_to")
+    tag_ids             = data.get("tag_ids", [])
+    tag_names           = data.get("tag_names", [])
+    year_label          = data.get("year_label", date_from[:4] if date_from else "export")
+    mode                = data.get("mode", "stage1")   # "stage0"|"stage1"|"stage2"|"both"
+    date_field          = data.get("date_field", "created")  # Issue #3
+    append_mode         = data.get("append_mode", False)      # Issue #4: nur neue hinzufügen
+    document_type_ids   = data.get("document_type_ids", []) or []  # Issue #7
 
     if not date_from or not date_to:
         return jsonify({"error": "Bitte Datumsbereich angeben."}), 400
@@ -510,6 +546,7 @@ def api_start():
         thread = threading.Thread(
             target=run_stage0,
             args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
+            kwargs={"document_type_ids": document_type_ids},
             daemon=True,
         )
     elif mode == "stage2":
@@ -526,12 +563,13 @@ def api_start():
         thread = threading.Thread(
             target=run_stage2,
             args=(excel_path, year_label, None, date_from, date_to, tag_ids, date_field),
+            kwargs={"document_type_ids": document_type_ids},
             daemon=True,
         )
     elif mode == "both":
         def run_both():
             run_stage1(date_from, date_to, tag_ids, tag_names, year_label, date_field,
-                       append_mode=append_mode)
+                       append_mode=append_mode, document_type_ids=document_type_ids)
             with job_lock:
                 ep  = job_status.get("excel_path")
                 err = job_status.get("error")
@@ -539,14 +577,15 @@ def api_start():
                 with job_lock:
                     job_status.update({"running": True, "done": False})
                 cancel_event.clear()  # Sicherstellen dass kein alter Abbruch-State hängt
-                run_stage2(ep, year_label, None, date_from, date_to, tag_ids, date_field)
+                run_stage2(ep, year_label, None, date_from, date_to, tag_ids, date_field,
+                           document_type_ids=document_type_ids)
         thread = threading.Thread(target=run_both, daemon=True)
     else:
         # stage1
         thread = threading.Thread(
             target=run_stage1,
             args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
-            kwargs={"append_mode": append_mode},
+            kwargs={"append_mode": append_mode, "document_type_ids": document_type_ids},
             daemon=True,
         )
 
