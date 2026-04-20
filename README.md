@@ -226,6 +226,47 @@ paperless-tax-exporter/
 
 ---
 
+## Roadmap
+
+### v2.3 – GUI-Verbesserungen *(geplant)*
+
+| # | Feature |
+|---|---------|
+| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Logo + Favicon, konfigurierbarer App-Name (`APP_TITLE`) |
+| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Tags- und Dokumententyp-Filter nebeneinander (Responsive Layout) |
+| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Subfolder-Picker als Modal (Ordnerstruktur auswählen + neuen Ordner anlegen) |
+| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Hinweistext in Kopfzeile inline, aktuelles Kalenderjahr vorausgewählt |
+| [#19](https://github.com/Sturmi77/paperless-tax-exporter/issues/19) | Fortschrittsanzeige (Ø-Zeit + ETA) in allen Export-Stufen |
+
+### v3.0 – Rudimentäre Buchhaltung *(Konzeptphase)*
+
+Aufbauend auf dem bestehenden Eingangsrechnungs-Export entsteht schrittweise eine
+vollständige Buchhaltungsbasis – lokal, ohne Cloud-Dienste.
+
+#### Milestone 1 – Ausgangsrechnungen ([#20](https://github.com/Sturmi77/paperless-tax-exporter/issues/20))
+
+- Ausgangsrechnungen aus Paperless exportieren (eigener Dokumententyp-Filter, aufbauend auf Issue #7)
+- LLM-gestützte Extraktion von Betrag, Rechnungsnummer und Empfänger via Ollama
+- Separates Excel `Ausgangsrechnungen_{Jahr}.xlsx` im komm|event CI
+- Spalten: Rechnungsnummer, Datum, Fälligkeitsdatum, Empfänger, Betrag netto/brutto, Zahlungsstatus
+
+#### Milestone 2 – Monatliche G+V-Berichte ([#20](https://github.com/Sturmi77/paperless-tax-exporter/issues/20))
+
+- Gegenüberstellung Einnahmen (Ausgangsrechnungen) vs. Ausgaben (Eingangsrechnungen)
+- Gruppierung nach Dokumententyp / Kennzahl (Spalte G)
+- Filterbarer Zeitraum: Monat, Quartal, Jahr
+- Ausgabe als separates Excel-Sheet oder PDF
+
+#### Milestone 3 – Mahnwesen ([#20](https://github.com/Sturmi77/paperless-tax-exporter/issues/20) + [#11](https://github.com/Sturmi77/paperless-tax-exporter/issues/11))
+
+- Aufbauend auf Issue #11 (Buchungsbestätigungen per LLM zuordnen):
+  Ausgangsrechnung + Fälligkeitsdatum bekannt → fehlende Zahlung = offener Posten
+- Export einer Offene-Posten-Liste
+- Optional: Mahnschreiben-Vorlage aus unbezahlten Rechnungen befüllen
+
+
+---
+
 ## Lizenz
 
 Internes Projekt – keine öffentliche Lizenz.
