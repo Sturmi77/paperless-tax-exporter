@@ -35,6 +35,7 @@ WINDOWS_UNC_PATH = os.environ.get("WINDOWS_UNC_PATH", r"\\SynologyDS923\download
 HYPERLINK_MODE    = os.environ.get("HYPERLINK_MODE", "cell").lower()
 # Issue #8: Spalte K mit kopierbarem UNC-Pfad (plain text) einblenden
 INCLUDE_TEXT_PATH = os.environ.get("INCLUDE_TEXT_PATH", "false").lower() == "true"
+APP_TITLE         = os.environ.get("APP_TITLE", "Steuerberater Export")
 
 os.environ.setdefault("OLLAMA_URL",   OLLAMA_URL)
 os.environ.setdefault("OLLAMA_MODEL", OLLAMA_MODEL)
@@ -478,7 +479,7 @@ def run_stage2(excel_path, year_label, docs=None,
 # ── Flask Routes ───────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", app_title=APP_TITLE)
 
 
 @app.route("/api/tags")

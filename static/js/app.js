@@ -47,28 +47,35 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // --- Verbindungscheck --------------------------------------------------
-async function checkConnection() {
+// SVG-Icons für Connection-Badge (S1: nicht nur Farbe)
+const BADGE_ICONS = {
+  checking: '<svg class="badge-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/></svg>',
+  ok:       '<svg class="badge-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>',
+  error:    '<svg class="badge-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+};
+
+function setBadge(state, text, title = "") {
   const badge = $("connection-status");
+  badge.className = `badge badge-${state}`;
+  badge.title     = title;
+  badge.innerHTML = (BADGE_ICONS[state] || "") + `<span class="badge-label">${text}</span>`;
+}
+
+async function checkConnection() {
+  setBadge("checking", "Verbinde…");
   try {
     const res  = await fetch("/api/health");
     const data = await res.json();
     if (!data.token_configured) {
-      badge.textContent = "Token nicht konfiguriert";
-      badge.className   = "badge badge-error";
-      badge.title       = "PAPERLESS_TOKEN fehlt – bitte .env auf dem NAS anlegen";
+      setBadge("error", "Token nicht konfiguriert", "PAPERLESS_TOKEN fehlt – bitte .env auf dem NAS anlegen");
     } else if (data.paperless_reachable === false) {
-      badge.textContent = "Paperless nicht erreichbar";
-      badge.className   = "badge badge-error";
-      badge.title       = data.error || "";
+      setBadge("error", "Paperless nicht erreichbar", data.error || "");
     } else {
       const ollama = data.ollama_available ? " · Ollama ✓" : " · Ollama ✗";
-      badge.textContent = "Paperless verbunden" + ollama;
-      badge.className   = "badge badge-ok";
-      badge.title       = data.ollama_status || "";
+      setBadge("ok", "Paperless verbunden" + ollama, data.ollama_status || "");
     }
   } catch {
-    badge.textContent = "Verbindungsfehler";
-    badge.className   = "badge badge-error";
+    setBadge("error", "Verbindungsfehler");
   }
 }
 
@@ -121,26 +128,38 @@ function validateSubfolderInput() {
 function buildYearButtons() {
   const container = $("quick-years");
   const thisYear  = new Date().getFullYear();
+  let firstBtn    = null;
   for (let y = thisYear; y >= thisYear - 3; y--) {
     const btn = document.createElement("button");
-    btn.className    = "year-btn";
-    btn.textContent  = y;
-    btn.dataset.year = y;
+    btn.className        = "year-btn";
+    btn.textContent      = y;
+    btn.dataset.year     = y;
+    btn.setAttribute("aria-pressed", "false");
     btn.addEventListener("click", () => selectYear(y, btn));
     container.appendChild(btn);
+    if (!firstBtn) firstBtn = btn;
   }
+  // Aktuelles Jahr (= erster Button) automatisch vorauswählen (Issue #12)
+  if (firstBtn) selectYear(thisYear, firstBtn);
 }
 
 function selectYear(year, btn) {
-  document.querySelectorAll(".year-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".year-btn").forEach(b => {
+    b.classList.remove("active");
+    b.setAttribute("aria-pressed", "false");
+  });
   btn.classList.add("active");
+  btn.setAttribute("aria-pressed", "true");
   $("date-from").value = `${year}-01-01`;
   $("date-to").value   = `${year}-12-31`;
   updateInfo();
 }
 
 function clearActiveYear() {
-  document.querySelectorAll(".year-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".year-btn").forEach(b => {
+    b.classList.remove("active");
+    b.setAttribute("aria-pressed", "false");
+  });
 }
 
 function getDateField() {
@@ -442,21 +461,35 @@ async function checkExistsAndConfirm(yearLabel, mode) {
   if (data.pdfs_exist)   details += `<li>PDF-Ordner: <strong>Belege/</strong> (${data.pdf_count} Dateien)</li>`;
 
   $("overwrite-details").innerHTML = details;
-  $("overwrite-modal").classList.remove("hidden");
+  const modal = $("overwrite-modal");
+  modal.classList.remove("hidden");
+
+  // Fokus auf ersten Button setzen (A1: Focus Management)
+  setTimeout(() => $("btn-overwrite-cancel").focus(), 50);
 
   return new Promise(resolve => {
-    $("btn-overwrite-append").onclick = () => {
-      $("overwrite-modal").classList.add("hidden");
-      resolve("append");
-    };
-    $("btn-overwrite-confirm").onclick = () => {
-      $("overwrite-modal").classList.add("hidden");
-      resolve(true);
-    };
-    $("btn-overwrite-cancel").onclick = () => {
-      $("overwrite-modal").classList.add("hidden");
-      resolve(false);
-    };
+    function closeModal(result) {
+      modal.classList.add("hidden");
+      document.removeEventListener("keydown", escHandler);
+      modal.removeEventListener("click", backdropHandler);
+      resolve(result);
+    }
+
+    // M2: Escape-Key schließt Modal
+    function escHandler(e) {
+      if (e.key === "Escape") closeModal(false);
+    }
+    document.addEventListener("keydown", escHandler);
+
+    // M3: Klick auf Backdrop schließt Modal
+    function backdropHandler(e) {
+      if (e.target === modal) closeModal(false);
+    }
+    modal.addEventListener("click", backdropHandler);
+
+    $("btn-overwrite-append").onclick  = () => closeModal("append");
+    $("btn-overwrite-confirm").onclick = () => closeModal(true);
+    $("btn-overwrite-cancel").onclick  = () => closeModal(false);
   });
 }
 
@@ -487,6 +520,7 @@ async function startExport(mode) {
   // Issue #4: Überschreib-Prüfung (false=Abbrechen, true=Überschreiben, "append"=Nur neue)
   const confirmed = await checkExistsAndConfirm(yearLabel, mode);
   if (confirmed === false) return;
+
 
   const appendMode = confirmed === "append";
 
