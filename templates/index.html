@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Steuerberater Export · komm|event</title>
+  <title>{{ app_title }} · komm|event</title>
+  <link rel="icon" type="image/jpeg" href="/static/img/favicon.jpg" />
   <link rel="stylesheet" href="/static/css/style.css?v={{ ver }}" />
 </head>
 <body>
@@ -12,14 +13,19 @@
     <header class="header">
       <div class="header-inner">
         <div class="header-logo">
-          <img src="/static/logo.png" alt="komm|event" />
+          <img src="/static/img/logo.jpg" alt="komm|event" />
           <div class="header-divider"></div>
           <div class="header-title">
-            <span class="header-title-main">Steuerberater Export</span>
+            <span class="header-title-main">{{ app_title }}</span>
             <span class="header-title-sub">Paperless NGX · Belegverwaltung</span>
           </div>
         </div>
-        <div id="connection-status" class="badge badge-checking">Verbinde…</div>
+        <div id="connection-status" class="badge badge-checking">
+          <svg class="badge-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <circle cx="12" cy="12" r="10"/>
+          </svg>
+          <span class="badge-label">Verbinde…</span>
+        </div>
       </div>
     </header>
 
@@ -27,24 +33,26 @@
 
       <!-- Konfigurationscard -->
       <section class="card" id="config-card">
-        <h2 class="card-title">Export konfigurieren</h2>
 
-        <!-- 1. Info-Banner -->
-        <div class="info-box">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
-            <line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-          <span>Paperless wird ausschließlich lesend verwendet. Exportierte Dateien werden im konfigurierten Ausgabepfad gespeichert.</span>
+        <!-- Card-Titel + Hinweistext inline (Issue #12) -->
+        <div class="card-title-row">
+          <h2 class="card-title">Export konfigurieren</h2>
+          <span class="card-title-hint">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            Paperless wird ausschließlich lesend verwendet. Exportierte Dateien werden im konfigurierten Ausgabepfad gespeichert.
+          </span>
         </div>
 
-        <!-- 2. Schnellauswahl Kalenderjahr -->
+        <!-- 1. Schnellauswahl Kalenderjahr -->
         <div class="field-group">
           <label class="field-label">Schnellauswahl Kalenderjahr</label>
           <div class="quick-years" id="quick-years"></div>
         </div>
 
-        <!-- 3. Datumsbereich + Pill-Toggle -->
+        <!-- 2. Datumsbereich + Pill-Toggle -->
         <div class="field-row">
           <div class="field-group">
             <label class="field-label" for="date-from">Von</label>
@@ -66,92 +74,130 @@
               Scandatum
             </button>
           </div>
-          <span class="date-toggle-hint" id="date-toggle-hint"></span>
+          <span class="date-toggle-hint" id="date-toggle-hint" aria-live="polite"></span>
         </div>
 
-        <!-- 4a. Dokumententyp-Filter (Issue #7) -->
-        <div class="field-group" style="margin-top: 20px;">
-          <label class="field-label">
-            Dokumententyp
-            <span class="hint">Kein Typ = alle Dokumenttypen im Zeitraum</span>
-          </label>
-          <div id="doctype-loading" class="tag-loading">Lade Dokumenttypen…</div>
-          <div id="doctype-error" class="error-msg hidden"></div>
+        <!-- 3. Dokumententyp + Tags nebeneinander (Issue #12) -->
+        <div class="filter-row">
 
-          <div class="tag-dropdown hidden" id="doctype-dropdown">
-            <div class="tag-input-wrap" id="doctype-input-wrap">
-              <div class="tag-chips" id="doctype-chips"></div>
-              <input
-                type="text"
-                class="tag-search"
-                id="doctype-search"
-                placeholder="Typ wählen…"
-                autocomplete="off"
-              />
+          <!-- 3a. Dokumententyp-Filter (Issue #7) -->
+          <div class="field-group">
+            <label class="field-label" for="doctype-search">Dokumententyp</label>
+            <p class="field-hint" id="doctype-hint">Kein Typ = alle Dokumenttypen im Zeitraum</p>
+            <div id="doctype-loading" class="tag-loading">Lade Dokumenttypen…</div>
+            <div id="doctype-error" class="error-msg hidden" role="alert"></div>
+            <div class="tag-dropdown hidden" id="doctype-dropdown">
+              <div class="tag-input-wrap" id="doctype-input-wrap">
+                <div class="tag-chips" id="doctype-chips"></div>
+                <input
+                  type="text"
+                  class="tag-search"
+                  id="doctype-search"
+                  placeholder="Typ wählen…"
+                  autocomplete="off"
+                  aria-describedby="doctype-hint"
+                />
+              </div>
+              <div class="tag-panel hidden" id="doctype-panel" role="listbox" aria-label="Dokumenttypen"></div>
             </div>
-            <div class="tag-panel hidden" id="doctype-panel"></div>
           </div>
-        </div>
 
-        <!-- 4b. Tag-Auswahl (Chip-Dropdown) -->
-        <div class="field-group" style="margin-top: 16px;">
-          <label class="field-label">
-            Tags filtern
-            <span class="hint">Kein Tag = alle Dokumente im Zeitraum</span>
-          </label>
-          <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
-          <div id="tag-error" class="error-msg hidden"></div>
-
-          <div class="tag-dropdown hidden" id="tag-dropdown">
-            <div class="tag-input-wrap" id="tag-input-wrap">
-              <div class="tag-chips" id="tag-chips"></div>
-              <input
-                type="text"
-                class="tag-search"
-                id="tag-search"
-                placeholder="Tags wählen…"
-                autocomplete="off"
-              />
+          <!-- 3b. Tag-Auswahl (Chip-Dropdown) -->
+          <div class="field-group">
+            <label class="field-label" for="tag-search">Tags filtern</label>
+            <p class="field-hint" id="tag-hint">Kein Tag = alle Dokumente im Zeitraum</p>
+            <div id="tag-loading" class="tag-loading">Lade Tags aus Paperless…</div>
+            <div id="tag-error" class="error-msg hidden" role="alert"></div>
+            <div class="tag-dropdown hidden" id="tag-dropdown">
+              <div class="tag-input-wrap" id="tag-input-wrap">
+                <div class="tag-chips" id="tag-chips"></div>
+                <input
+                  type="text"
+                  class="tag-search"
+                  id="tag-search"
+                  placeholder="Tags wählen…"
+                  autocomplete="off"
+                  aria-describedby="tag-hint"
+                />
+              </div>
+              <div class="tag-panel hidden" id="tag-panel" role="listbox" aria-label="Tags"></div>
             </div>
-            <div class="tag-panel hidden" id="tag-panel"></div>
           </div>
-        </div>
 
-        <!-- 5. Aktions-Buttons -->
-        <div class="actions actions-stacked">
+        </div><!-- /.filter-row -->
 
-          <button class="btn btn-primary btn-both" id="btn-both" disabled>
+        <!-- 4. Ausgabepfad + Unterordner (Issue #9, Issue #12 Schritt 4: Picker) -->
+        <!-- F4: fieldset/legend für semantisches Grouping (Schritt 3) -->
+        <fieldset class="field-group subfolder-fieldset">
+          <legend class="field-label">Unterordner</legend>
+          <p class="field-hint">Optional – Unterordner für die Ausgabedateien auswählen</p>
+          <div class="subfolder-row subfolder-picker-row">
+            <div class="output-path output-path-base">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span id="output-path-text">…</span>
+            </div>
+            <!-- Picker-Button + ausgelesener Ordnername -->
+            <button type="button" class="btn btn-secondary btn-picker" id="subfolder-picker-btn"
+                    aria-haspopup="dialog" aria-label="Unterordner auswählen">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span id="subfolder-picker-label">(kein Unterordner)</span>
+            </button>
+            <!-- Hidden input für Formularwert (Kompatibilität mit startExport) -->
+            <input type="hidden" id="subfolder-input" value=""/>
+          </div>
+          <div class="subfolder-preview hidden" id="subfolder-preview" aria-live="polite"></div>
+        </fieldset>
+
+        <!-- 5. Aktions-Buttons (Issue #12: Primär + Sekundär-Reihe) -->
+        <div class="actions-export">
+
+          <!-- Primär: Vollständiger Export -->
+          <button class="btn btn-primary btn-export-primary" id="btn-both"
+                  aria-disabled="true" disabled>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
             <span>Vollständiger Export<small>PDFs · Excel · OCR-Analyse</small></span>
           </button>
 
-          <button class="btn btn-primary" id="btn-stage1" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-            <span>PDFs &amp; Excel<small>Download + Aufstellung erstellen</small></span>
-          </button>
+          <!-- Sekundär-Reihe -->
+          <div class="actions-secondary-label">Weitere Optionen</div>
+          <div class="actions-secondary">
+            <button class="btn btn-secondary" id="btn-stage1"
+                    aria-disabled="true" disabled>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <span>PDFs &amp; Excel<small>Download + Aufstellung</small></span>
+            </button>
 
-          <button class="btn btn-secondary" id="btn-stage0" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
-            </svg>
-            <span>Nur Excel<small>Ohne PDF-Download</small></span>
-          </button>
+            <button class="btn btn-secondary" id="btn-stage0"
+                    aria-disabled="true" disabled>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+              </svg>
+              <span>Nur Excel<small>Ohne PDF-Download</small></span>
+            </button>
 
-          <button class="btn btn-secondary" id="btn-stage2" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-            <span>OCR-Analyse<small>Bestehende Dateien verwenden</small></span>
-          </button>
+            <button class="btn btn-secondary" id="btn-stage2"
+                    aria-disabled="true" disabled>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <span>OCR-Analyse<small>Bestehende Dateien</small></span>
+            </button>
+          </div>
 
-          <span class="selected-info" id="selected-info"></span>
+          <span class="selected-info" id="selected-info" aria-live="polite" aria-atomic="true">
+            Datumsbereich wählen, um Export zu starten.
+          </span>
         </div>
 
         <!-- 6. Tipp-Box -->
@@ -168,39 +214,13 @@
             <p>Jahresexport bereits abgeschlossen und eine vergessene Rechnung nachgescannt? Kein Neuexport nötig:</p>
             <ol>
               <li>Gleichen Datumsbereich wie beim Erstexport wählen</li>
-              <li><strong>Stufe 1</strong> oder <strong>Stufe 1 + 2</strong> starten</li>
+              <li><strong>PDFs &amp; Excel</strong> oder <strong>Vollständiger Export</strong> starten</li>
               <li>Im Dialog <strong>„Nur neue hinzufügen"</strong> wählen</li>
             </ol>
             <p class="tip-result">Bereits vorhandene Belege werden übersprungen – nur neue Dokumente werden heruntergeladen und ans Excel angehängt.</p>
           </div>
         </details>
 
-        <!-- 7. Ausgabepfad + Unterordner (Issue #9) -->
-        <div class="field-group" style="margin-top: 12px;">
-          <label class="field-label" for="subfolder-input">
-            Unterordner
-            <span class="hint">Optional – z.B. "2024-Q4" oder "Archiv"</span>
-          </label>
-          <div class="subfolder-row">
-            <div class="output-path output-path-base">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
-              <span id="output-path-text">…</span>
-            </div>
-            <input
-              type="text"
-              class="input input-subfolder"
-              id="subfolder-input"
-              placeholder="(kein Unterordner)"
-              maxlength="50"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </div>
-          <div class="subfolder-error error-msg hidden" id="subfolder-error"></div>
-          <div class="subfolder-preview hidden" id="subfolder-preview"></div>
-        </div>
       </section>
 
       <!-- Job-Fortschritt -->
@@ -208,7 +228,9 @@
         <h2 class="card-title" id="progress-title">Export wird durchgeführt…</h2>
 
         <div class="progress-bar-wrap">
-          <div class="progress-bar" id="progress-bar"></div>
+          <div class="progress-bar indeterminate" id="progress-bar"
+               role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+               aria-label="Export-Fortschritt"></div>
         </div>
 
         <!-- OCR-Fortschritt (nur Stufe 2) -->
@@ -226,7 +248,8 @@
           </div>
         </div>
 
-        <div class="log-box" id="log-box"></div>
+        <div class="log-box" id="log-box"
+             role="log" aria-live="polite" aria-label="Export-Protokoll"></div>
 
         <div class="actions" id="download-area" style="display:none;">
           <a class="btn btn-success" href="/api/download-excel" download>
@@ -242,7 +265,7 @@
           </button>
         </div>
 
-        <!-- Issue #2: Abbrechen-Button -->
+        <!-- Abbrechen-Button -->
         <div class="cancel-area">
           <button class="btn btn-danger hidden" id="btn-cancel">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -260,13 +283,67 @@
     <footer class="footer">
       <a href="http://www.kommevent.at/" target="_blank">komm|event</a>
       · Agentur für Kommunikation &amp; Events
-      · Steuerberater Export v2.2 · <span id="footer-year"></span>
+      · {{ app_title }} v2.2 · <span id="footer-year"></span>
     </footer>
 
   </div>
 
-  <!-- Issue #4: Überschreib-Modal -->
-  <div id="overwrite-modal" class="modal-overlay hidden">
+  <!-- Subfolder-Picker Modal (Issue #12, Schritt 4) -->
+  <div id="subfolder-modal" class="modal-overlay hidden"
+       role="dialog" aria-modal="true" aria-labelledby="subfolder-modal-title"
+       aria-describedby="subfolder-modal-desc">
+    <div class="modal modal-subfolder">
+      <div class="modal-header">
+        <h3 class="modal-title" id="subfolder-modal-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          Unterordner auswählen
+        </h3>
+        <button class="modal-close-btn" id="subfolder-modal-close" aria-label="Schließen">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <p class="modal-text" id="subfolder-modal-desc">Wähle einen bestehenden Unterordner oder lege einen neuen an.</p>
+      <div class="subfolder-search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="search" id="subfolder-search" class="subfolder-search-input"
+               placeholder="Suchen…" autocomplete="off" aria-label="Unterordner suchen"/>
+      </div>
+      <ul id="subfolder-list" class="subfolder-list" role="listbox" aria-label="Verfügbare Unterordner">
+        <li class="subfolder-list-empty" aria-live="polite">Lade Unterordner…</li>
+      </ul>
+      <!-- Neuen Ordner anlegen -->
+      <div class="subfolder-new-wrap">
+        <div class="subfolder-new-row">
+          <input type="text" id="subfolder-new-input" class="input subfolder-new-input"
+                 placeholder="Neuer Ordnername" maxlength="50"
+                 autocomplete="off" spellcheck="false"
+                 aria-label="Name für neuen Unterordner"
+                 pattern="[A-Za-z0-9_\-]{1,50}"/>
+          <button class="btn btn-secondary" id="subfolder-new-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Erstellen
+          </button>
+        </div>
+        <div class="subfolder-new-error error-msg hidden" id="subfolder-new-error" role="alert"></div>
+      </div>
+      <div class="modal-actions modal-actions-subfolder">
+        <button class="btn btn-secondary" id="subfolder-modal-cancel">Abbrechen</button>
+        <button class="btn btn-primary" id="subfolder-modal-confirm" disabled>Auswählen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Überschreib-Modal (Issue #4) -->
+  <div id="overwrite-modal" class="modal-overlay hidden"
+       role="dialog" aria-modal="true" aria-labelledby="overwrite-modal-title">
     <div class="modal">
       <div class="modal-icon">
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e69800" stroke-width="2">
@@ -274,19 +351,19 @@
           <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
         </svg>
       </div>
-      <h3 class="modal-title">Dateien bereits vorhanden</h3>
+      <h3 class="modal-title" id="overwrite-modal-title">Dateien bereits vorhanden</h3>
       <p class="modal-text">Für diesen Zeitraum existieren bereits exportierte Dateien:</p>
       <ul class="modal-details" id="overwrite-details"></ul>
       <p class="modal-text modal-text-warn">Beim Überschreiben werden diese Dateien ersetzt – manuelle Einträge (Zahlungsdatum, Kennzahl) gehen verloren.</p>
       <div class="modal-actions">
+        <button class="btn btn-secondary" id="btn-overwrite-cancel">Abbrechen</button>
         <button class="btn btn-primary" id="btn-overwrite-append">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
           Nur neue hinzufügen
         </button>
-        <button class="btn btn-danger" id="btn-overwrite-confirm">Alles überschreiben</button>
-        <button class="btn btn-secondary" id="btn-overwrite-cancel">Abbrechen</button>
+        <button class="btn btn-danger btn-modal-danger" id="btn-overwrite-confirm">Alles überschreiben</button>
       </div>
     </div>
   </div>
@@ -294,6 +371,7 @@
   <script>
     window.onerror = function(msg, src, line) {
       const b = document.createElement('div');
+      b.setAttribute('role', 'alert');
       b.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#e53e3e;color:#fff;font-size:12px;padding:6px 12px;font-family:monospace;z-index:9999;';
       b.textContent = 'JS-Fehler: ' + msg + ' (Zeile ' + line + ')';
       document.body && document.body.appendChild(b);

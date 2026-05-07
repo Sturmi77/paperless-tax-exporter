@@ -20,9 +20,9 @@ document.addEventListener("DOMContentLoaded", () => {
   checkConnection();
   updateOutputPath();
 
-  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); validateSubfolderInput(); });
+  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); updateSubfolderPreview(); });
   $("date-to").addEventListener("change",   () => { clearActiveYear(); updateInfo(); });
-  $("subfolder-input").addEventListener("input", validateSubfolderInput);
+  initSubfolderPicker();
 
   $("btn-stage0").addEventListener("click",  () => startExport("stage0"));
   $("btn-stage1").addEventListener("click",  () => startExport("stage1"));
@@ -32,49 +32,100 @@ document.addEventListener("DOMContentLoaded", () => {
   $("new-export-btn").addEventListener("click", resetUI);
 
   // Segmented Control für Datumsfeld (Issue #10)
-  updateDateToggleHint(); // Hilfetext beim initialen Seitenload setzen
-  document.querySelectorAll('.pill-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.pill-btn').forEach(b => {
-        b.classList.remove('pill-active');
-        b.setAttribute('aria-pressed', 'false');
-      });
-      btn.classList.add('pill-active');
-      btn.setAttribute('aria-pressed', 'true');
-      updateDateToggleHint();
+  // A4: ARIA radiogroup-Pattern mit Arrow-Key-Navigation
+  updateDateToggleHint();
+  const pillBtns = Array.from(document.querySelectorAll('.pill-btn'));
+  pillBtns.forEach((btn, idx) => {
+    btn.addEventListener('click', () => activatePill(btn));
+    btn.addEventListener('keydown', e => {
+      let next = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        next = pillBtns[(idx + 1) % pillBtns.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        next = pillBtns[(idx - 1 + pillBtns.length) % pillBtns.length];
+      }
+      if (next) { activatePill(next); next.focus(); }
     });
   });
+
+  function activatePill(btn) {
+    pillBtns.forEach(b => {
+      b.classList.remove('pill-active');
+      b.setAttribute('aria-pressed', 'false');
+      b.setAttribute('tabindex', '-1');
+    });
+    btn.classList.add('pill-active');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.setAttribute('tabindex', '0');
+    updateDateToggleHint();
+  }
+  // Nur aktiven Pill im Tab-Pfad (roving tabindex)
+  pillBtns.forEach(b => b.setAttribute('tabindex', b.classList.contains('pill-active') ? '0' : '-1'));
 });
 
 // --- Verbindungscheck --------------------------------------------------
-async function checkConnection() {
+// SVG-Icons für Connection-Badge (S1: nicht nur Farbe)
+const BADGE_ICONS = {
+  checking: '<svg class="badge-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/></svg>',
+  ok:       '<svg class="badge-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>',
+  error:    '<svg class="badge-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+};
+
+function setBadge(state, text, title = "") {
   const badge = $("connection-status");
+  badge.className = `badge badge-${state}`;
+  badge.title     = title;
+  badge.innerHTML = (BADGE_ICONS[state] || "") + `<span class="badge-label">${text}</span>`;
+}
+
+// S4: Globaler API-Fehler-Banner (Paperless nicht erreichbar)
+function showGlobalError(msg) {
+  let banner = $("global-error-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id        = "global-error-banner";
+    banner.setAttribute("role", "alert");
+    banner.className = "global-error-banner";
+    banner.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span id="global-error-text"></span><button class="global-error-retry" onclick="checkConnection(); loadTags(); loadDocumentTypes();" title="Erneut versuchen">Verbindung wiederherstellen</button>';
+    document.querySelector(".main").prepend(banner);
+  }
+  $("global-error-text").textContent = msg;
+  banner.classList.remove("hidden");
+}
+
+function hideGlobalError() {
+  const banner = $("global-error-banner");
+  if (banner) banner.classList.add("hidden");
+}
+
+async function checkConnection() {
+  setBadge("checking", "Verbinde…");
   try {
     const res  = await fetch("/api/health");
     const data = await res.json();
     if (!data.token_configured) {
-      badge.textContent = "Token nicht konfiguriert";
-      badge.className   = "badge badge-error";
-      badge.title       = "PAPERLESS_TOKEN fehlt – bitte .env auf dem NAS anlegen";
+      setBadge("error", "Token nicht konfiguriert", "PAPERLESS_TOKEN fehlt – bitte .env auf dem NAS anlegen");
+      showGlobalError("PAPERLESS_TOKEN nicht konfiguriert. Bitte .env auf dem NAS anlegen und Container neu starten.");
     } else if (data.paperless_reachable === false) {
-      badge.textContent = "Paperless nicht erreichbar";
-      badge.className   = "badge badge-error";
-      badge.title       = data.error || "";
+      setBadge("error", "Paperless nicht erreichbar", data.error || "");
+      showGlobalError("Paperless NGX ist nicht erreichbar. Bitte Verbindung und URL prüfen.");
     } else {
       const ollama = data.ollama_available ? " · Ollama ✓" : " · Ollama ✗";
-      badge.textContent = "Paperless verbunden" + ollama;
-      badge.className   = "badge badge-ok";
-      badge.title       = data.ollama_status || "";
+      setBadge("ok", "Paperless verbunden" + ollama, data.ollama_status || "");
+      hideGlobalError();
     }
   } catch {
-    badge.textContent = "Verbindungsfehler";
-    badge.className   = "badge badge-error";
+    setBadge("error", "Verbindungsfehler");
+    showGlobalError("Verbindung zur App unterbrochen. Bitte Seite neu laden.");
   }
 }
 
-// --- Output-Pfad + Unterordner (Issue #9) ---------------------------------
+// --- Output-Pfad + Unterordner (Issue #9, Issue #12 Schritt 4: Picker) ------
 // Allowlist-Regex (spiegelt Backend-Validierung exakt)
 const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;
+
 async function updateOutputPath() {
   try {
     const res  = await fetch("/api/config");
@@ -87,60 +138,256 @@ async function updateOutputPath() {
   }
 }
 
+// Liefert den aktuell gewählten Unterordner-Wert (hidden input)
 function getSubfolder() {
   return ($("subfolder-input").value || "").trim();
 }
 
-function validateSubfolderInput() {
+// Pfad-Vorschau unter dem Picker-Button aktualisieren
+function updateSubfolderPreview() {
   const val     = getSubfolder();
-  const errEl   = $("subfolder-error");
   const preview = $("subfolder-preview");
-
   if (!val) {
-    errEl.classList.add("hidden");
     preview.classList.add("hidden");
-    return true;
+    return;
   }
-
-  if (!SUBFOLDER_RE.test(val)) {
-    errEl.textContent = "Nur Buchstaben, Zahlen, _ und - erlaubt (keine Leerzeichen, Schrägstriche, Sonderzeichen).";
-    errEl.classList.remove("hidden");
-    preview.classList.add("hidden");
-    return false;
-  }
-
-  errEl.classList.add("hidden");
-  // Pfad-Vorschau: {Jahr}/{Unterordner}/Belege/
   const year = $("date-from").value ? $("date-from").value.slice(0, 4) : "{Jahr}";
   preview.textContent = `→ ${year}/${val}/Belege/`;
   preview.classList.remove("hidden");
-  return true;
+}
+
+// Picker-Button-Label + hidden input setzen
+function setSubfolderValue(name) {
+  $("subfolder-input").value = name;
+  const label = $("subfolder-picker-label");
+  if (name) {
+    label.textContent = name;
+    label.classList.add("has-value");
+  } else {
+    label.textContent = "(kein Unterordner)";
+    label.classList.remove("has-value");
+  }
+  updateSubfolderPreview();
+}
+
+// ---------------------------------------------------------------------------
+// Subfolder-Picker Modal (Issue #12, Schritt 4)
+// ---------------------------------------------------------------------------
+let _pickerSelectedValue = "";  // aktuell im Modal selektierter Wert
+
+function initSubfolderPicker() {
+  $("subfolder-picker-btn").addEventListener("click", openSubfolderModal);
+}
+
+async function openSubfolderModal() {
+  const modal     = $("subfolder-modal");
+  const list      = $("subfolder-list");
+  const searchEl  = $("subfolder-search");
+  const newInput  = $("subfolder-new-input");
+  const newErr    = $("subfolder-new-error");
+  const confirmBtn = $("subfolder-modal-confirm");
+
+  // Reset Modal-State
+  searchEl.value     = "";
+  newInput.value     = "";
+  newErr.classList.add("hidden");
+  newErr.textContent = "";
+  _pickerSelectedValue = getSubfolder(); // aktuell gesetzter Wert vorselektieren
+  confirmBtn.disabled = false; // immer erlaubt (auch "Kein Unterordner" wählen)
+
+  modal.classList.remove("hidden");
+
+  // Unterordner laden
+  list.innerHTML = '<li class="subfolder-list-empty">Lade Unterordner…</li>';
+  let folders = [];
+  try {
+    const res  = await fetch("/api/subfolders");
+    const data = await res.json();
+    folders = data.subfolders || [];
+  } catch {
+    // Fallback: API nicht erreichbar → leere Liste + Info
+    folders = null;
+  }
+
+  renderFolderList(list, folders, searchEl.value);
+
+  // Fokus auf Suche setzen (erste fokussierbare Element)
+  setTimeout(() => searchEl.focus(), 50);
+
+  // Suche filtern
+  searchEl.addEventListener("input", () => renderFolderList(list, folders, searchEl.value), { once: false });
+
+  // Focus-Trap + Keyboard-Handling
+  function closeModal(confirmed) {
+    modal.classList.add("hidden");
+    document.removeEventListener("keydown", escHandler);
+    modal.removeEventListener("click",     backdropHandler);
+    searchEl.removeEventListener("input",  filterHandler);
+    if (confirmed) {
+      setSubfolderValue(_pickerSelectedValue);
+    }
+    // Fokus zurück auf Picker-Button
+    $("subfolder-picker-btn").focus();
+  }
+
+  function filterHandler() {
+    renderFolderList(list, folders, searchEl.value);
+  }
+  searchEl.addEventListener("input", filterHandler);
+
+  function escHandler(e) {
+    if (e.key === "Escape") closeModal(false);
+  }
+  document.addEventListener("keydown", escHandler);
+
+  function backdropHandler(e) {
+    if (e.target === modal) closeModal(false);
+  }
+  modal.addEventListener("click", backdropHandler);
+
+  $("subfolder-modal-close").onclick  = () => closeModal(false);
+  $("subfolder-modal-cancel").onclick = () => closeModal(false);
+  $("subfolder-modal-confirm").onclick = () => closeModal(true);
+
+  // Neuen Ordner anlegen
+  $("subfolder-new-btn").onclick = async () => {
+    const name = (newInput.value || "").trim();
+    newErr.classList.add("hidden");
+
+    if (!name) {
+      newErr.textContent = "Bitte einen Ordnernamen eingeben.";
+      newErr.classList.remove("hidden");
+      newInput.focus();
+      return;
+    }
+    if (!SUBFOLDER_RE.test(name)) {
+      newErr.textContent = "Nur Buchstaben, Zahlen, _ und - erlaubt (1–50 Zeichen).";
+      newErr.classList.remove("hidden");
+      newInput.focus();
+      return;
+    }
+
+    try {
+      const res  = await fetch("/api/subfolders", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        newErr.textContent = data.error || "Fehler beim Erstellen.";
+        newErr.classList.remove("hidden");
+        return;
+      }
+      // Ordner angelegt → Liste aktualisieren + auswählen
+      if (folders !== null && !folders.includes(name)) {
+        folders.push(name);
+        folders.sort();
+      }
+      newInput.value = "";
+      _pickerSelectedValue = name;
+      renderFolderList(list, folders, searchEl.value);
+    } catch {
+      newErr.textContent = "API nicht erreichbar – Ordner konnte nicht angelegt werden.";
+      newErr.classList.remove("hidden");
+    }
+  };
+
+  // Enter in new-input triggert Erstellen
+  newInput.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); $("subfolder-new-btn").click(); }
+  });
+}
+
+function renderFolderList(list, folders, filter) {
+  list.innerHTML = "";
+  const q = (filter || "").toLowerCase().trim();
+
+  // "Kein Unterordner" Option immer oben
+  const noneItem = document.createElement("li");
+  noneItem.className   = "subfolder-list-item item-none";
+  noneItem.tabIndex    = 0;
+  noneItem.setAttribute("role", "option");
+  noneItem.setAttribute("aria-selected", _pickerSelectedValue === "" ? "true" : "false");
+  noneItem.innerHTML   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>(kein Unterordner)';
+  noneItem.addEventListener("click", () => { _pickerSelectedValue = ""; renderFolderList(list, folders, filter); });
+  noneItem.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); noneItem.click(); } });
+  list.appendChild(noneItem);
+
+  if (folders === null) {
+    // API-Fallback: Nur "kein Unterordner" + Hinweis
+    const fallback = document.createElement("li");
+    fallback.className = "subfolder-list-empty";
+    fallback.textContent = "Unterordner-Liste nicht verfügbar (API nicht erreichbar).";
+    list.appendChild(fallback);
+    return;
+  }
+
+  const filtered = folders.filter(f => !q || f.toLowerCase().includes(q));
+  if (filtered.length === 0 && folders.length > 0) {
+    const empty = document.createElement("li");
+    empty.className = "subfolder-list-empty";
+    empty.textContent = 'Keine Treffer für ' + '"' + filter + '".';
+    list.appendChild(empty);
+    return;
+  }
+  if (folders.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "subfolder-list-empty";
+    empty.textContent = "Noch keine Unterordner vorhanden – neuen Ordner anlegen.";
+    list.appendChild(empty);
+    return;
+  }
+
+  filtered.forEach(name => {
+    const item = document.createElement("li");
+    item.className  = "subfolder-list-item";
+    item.tabIndex   = 0;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", _pickerSelectedValue === name ? "true" : "false");
+    item.innerHTML  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' + name;
+    item.addEventListener("click", () => { _pickerSelectedValue = name; renderFolderList(list, folders, filter); });
+    item.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); item.click(); } });
+    list.appendChild(item);
+  });
 }
 
 // --- Schnellauswahl Kalenderjahre -------------------------------------
 function buildYearButtons() {
   const container = $("quick-years");
   const thisYear  = new Date().getFullYear();
+  let firstBtn    = null;
   for (let y = thisYear; y >= thisYear - 3; y--) {
     const btn = document.createElement("button");
-    btn.className    = "year-btn";
-    btn.textContent  = y;
-    btn.dataset.year = y;
+    btn.className        = "year-btn";
+    btn.textContent      = y;
+    btn.dataset.year     = y;
+    btn.setAttribute("aria-pressed", "false");
     btn.addEventListener("click", () => selectYear(y, btn));
     container.appendChild(btn);
+    if (!firstBtn) firstBtn = btn;
   }
+  // Aktuelles Jahr (= erster Button) automatisch vorauswählen (Issue #12)
+  if (firstBtn) selectYear(thisYear, firstBtn);
 }
 
 function selectYear(year, btn) {
-  document.querySelectorAll(".year-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".year-btn").forEach(b => {
+    b.classList.remove("active");
+    b.setAttribute("aria-pressed", "false");
+  });
   btn.classList.add("active");
+  btn.setAttribute("aria-pressed", "true");
   $("date-from").value = `${year}-01-01`;
   $("date-to").value   = `${year}-12-31`;
   updateInfo();
 }
 
 function clearActiveYear() {
-  document.querySelectorAll(".year-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".year-btn").forEach(b => {
+    b.classList.remove("active");
+    b.setAttribute("aria-pressed", "false");
+  });
 }
 
 function getDateField() {
@@ -210,14 +457,7 @@ function createChipDropdown(config) {
       const opt = document.createElement('div');
       opt.className  = 'tag-option' + (selectedIds.has(item.id) ? ' selected' : '');
       opt.dataset.id = item.id;
-      opt.innerHTML = `
-        <span class="tag-option-check">
-          ${selectedIds.has(item.id)
-            ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
-            : ''}
-        </span>
-        ${item.name}
-      `;
+      opt.innerHTML = `<span class="tag-option-check">${selectedIds.has(item.id) ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' : ''}</span>${item.name}`;
       opt.addEventListener('click', () => toggle(item.id));
       panel.appendChild(opt);
     });
@@ -342,18 +582,23 @@ async function loadTags() {
   }
 }
 
+const EXPORT_BTN_IDS = ["btn-stage0", "btn-stage1", "btn-both", "btn-stage2"];
+
 function enableButtons() {
-  $("btn-stage0").disabled = false;
-  $("btn-stage1").disabled = false;
-  $("btn-both").disabled   = false;
-  $("btn-stage2").disabled = false;
+  // F3: aria-disabled + disabled synchron; Buttons bleiben fokussierbar bis disabled gesetzt
+  EXPORT_BTN_IDS.forEach(id => {
+    const btn = $(id);
+    btn.disabled = false;
+    btn.removeAttribute("aria-disabled");
+  });
 }
 
 function disableButtons() {
-  $("btn-stage0").disabled = true;
-  $("btn-stage1").disabled = true;
-  $("btn-both").disabled   = true;
-  $("btn-stage2").disabled = true;
+  EXPORT_BTN_IDS.forEach(id => {
+    const btn = $(id);
+    btn.disabled = true;
+    btn.setAttribute("aria-disabled", "true");
+  });
 }
 
 // tagDropdown-Handle für externen Zugriff (selectedTags sync)
@@ -395,13 +640,17 @@ function updateInfo() {
   const to   = $("date-to").value;
   const info = $("selected-info");
   if (!from || !to) {
-    info.textContent = "Bitte Datumsbereich wählen.";
+    // F3: erklärender Initialtext warum Buttons inaktiv sind
+    info.textContent = "Datumsbereich wählen, um Export zu starten.";
     return;
   }
   const tagText = selectedTags.size > 0
     ? `${selectedTags.size} Tag(s) ausgewählt`
     : "alle Tags";
-  info.textContent = `${formatDate(from)} – ${formatDate(to)} · ${tagText}`;
+  const doctypeText = (doctypeDropdown && doctypeDropdown.selectedIds.size > 0)
+    ? ` · ${doctypeDropdown.selectedIds.size} Typ(en)`
+    : "";
+  info.textContent = `${formatDate(from)} – ${formatDate(to)} · ${tagText}${doctypeText}`;
 }
 
 function formatDate(iso) {
@@ -442,21 +691,35 @@ async function checkExistsAndConfirm(yearLabel, mode) {
   if (data.pdfs_exist)   details += `<li>PDF-Ordner: <strong>Belege/</strong> (${data.pdf_count} Dateien)</li>`;
 
   $("overwrite-details").innerHTML = details;
-  $("overwrite-modal").classList.remove("hidden");
+  const modal = $("overwrite-modal");
+  modal.classList.remove("hidden");
+
+  // Fokus auf ersten Button setzen (A1: Focus Management)
+  setTimeout(() => $("btn-overwrite-cancel").focus(), 50);
 
   return new Promise(resolve => {
-    $("btn-overwrite-append").onclick = () => {
-      $("overwrite-modal").classList.add("hidden");
-      resolve("append");
-    };
-    $("btn-overwrite-confirm").onclick = () => {
-      $("overwrite-modal").classList.add("hidden");
-      resolve(true);
-    };
-    $("btn-overwrite-cancel").onclick = () => {
-      $("overwrite-modal").classList.add("hidden");
-      resolve(false);
-    };
+    function closeModal(result) {
+      modal.classList.add("hidden");
+      document.removeEventListener("keydown", escHandler);
+      modal.removeEventListener("click", backdropHandler);
+      resolve(result);
+    }
+
+    // M2: Escape-Key schließt Modal
+    function escHandler(e) {
+      if (e.key === "Escape") closeModal(false);
+    }
+    document.addEventListener("keydown", escHandler);
+
+    // M3: Klick auf Backdrop schließt Modal
+    function backdropHandler(e) {
+      if (e.target === modal) closeModal(false);
+    }
+    modal.addEventListener("click", backdropHandler);
+
+    $("btn-overwrite-append").onclick  = () => closeModal("append");
+    $("btn-overwrite-confirm").onclick = () => closeModal(true);
+    $("btn-overwrite-cancel").onclick  = () => closeModal(false);
   });
 }
 
@@ -476,17 +739,18 @@ async function startExport(mode) {
   const dateField       = getDateField();
   const subfolder       = getSubfolder();
 
-  // Clientseitige Subfolder-Validierung (Issue #9)
+  // Clientseitige Subfolder-Validierung (Issue #9 / #12):
+  // Picker setzt nur valide Werte (SUBFOLDER_RE). Zur Sicherheit trotzdem prüfen.
   if (subfolder && !SUBFOLDER_RE.test(subfolder)) {
-    $("subfolder-error").textContent = "Ungültiger Unterordner – bitte korrigieren.";
-    $("subfolder-error").classList.remove("hidden");
-    $("subfolder-input").focus();
+    // Sollte durch Picker nicht mehr passieren – trotzdem absichern
+    $("subfolder-picker-btn").focus();
     return;
   }
 
   // Issue #4: Überschreib-Prüfung (false=Abbrechen, true=Überschreiben, "append"=Nur neue)
   const confirmed = await checkExistsAndConfirm(yearLabel, mode);
   if (confirmed === false) return;
+
 
   const appendMode = confirmed === "append";
 
@@ -591,12 +855,10 @@ async function pollStatus() {
     if (data.cancellable) {
       if (cancelBtn.classList.contains("hidden")) {
         cancelBtn.disabled  = false;
-        cancelBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="15" y1="9" x2="9" y2="15"/>
-          <line x1="9" y1="9" x2="15" y2="15"/>
-        </svg> OCR abbrechen`;
+        cancelBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> OCR abbrechen';
         cancelBtn.classList.remove("hidden");
+        // P4: Fokus auf Cancel-Button beim ersten Einblenden
+        cancelBtn.focus();
       }
       // bereits sichtbar → nichts tun
     } else {
@@ -621,6 +883,23 @@ async function pollStatus() {
       }
     }
 
+    // P3: Phasen-Label in progress-title aktualisieren
+    const titleEl = $("progress-title");
+    if (titleEl && data.stage && !data.done) {
+      const phaseLabels = {
+        stage0: "Excel wird erstellt…",
+        stage1: "PDFs werden heruntergeladen…",
+        stage2: "OCR-Analyse läuft…",
+        both:   "Export läuft…",
+      };
+      const lbl = phaseLabels[data.stage];
+      // Nur ändern wenn sich Phase geändert hat (nicht bei jedem Poll-Tick)
+      if (lbl && titleEl.dataset.phase !== data.stage) {
+        titleEl.textContent   = lbl;
+        titleEl.dataset.phase = data.stage;
+      }
+    }
+
     if (data.done) {
       stopPoll();
       lastLogCount = 0;
@@ -637,7 +916,10 @@ async function pollStatus() {
         bar.style.background = data.cancelled ? "#e69800" : "#2e7d32";
         $("download-area").style.display = "flex";
         const ct = $("progress-title");
-        if (ct) ct.textContent = data.cancelled ? "Job abgebrochen" : "Export abgeschlossen";
+        if (ct) {
+          ct.textContent   = data.cancelled ? "Job abgebrochen" : "Export abgeschlossen";
+          ct.dataset.phase = "done";
+        }
       }
       return; // kein schedulePoll() mehr
     }
@@ -651,11 +933,7 @@ async function pollStatus() {
 async function cancelJob() {
   const btn = $("btn-cancel");
   btn.disabled  = true;
-  btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-    <circle cx="12" cy="12" r="10"/>
-    <line x1="15" y1="9" x2="9" y2="15"/>
-    <line x1="9" y1="9" x2="15" y2="15"/>
-  </svg> Wird abgebrochen…`;
+  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> Wird abgebrochen…';
   try {
     await fetch("/api/cancel", { method: "POST" });
   } catch { /* ignore */ }
