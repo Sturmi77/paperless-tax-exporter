@@ -88,15 +88,7 @@ function showGlobalError(msg) {
     banner.id        = "global-error-banner";
     banner.setAttribute("role", "alert");
     banner.className = "global-error-banner";
-    banner.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
-        <line x1="12" y1="16" x2="12.01" y2="16"/>
-      </svg>
-      <span id="global-error-text"></span>
-      <button class="global-error-retry" onclick="checkConnection(); loadTags(); loadDocumentTypes();" title="Erneut versuchen">
-        Verbindung wiederherstellen
-      </button>`;
+    banner.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span id="global-error-text"></span><button class="global-error-retry" onclick="checkConnection(); loadTags(); loadDocumentTypes();" title="Erneut versuchen">Verbindung wiederherstellen</button>';
     document.querySelector(".main").prepend(banner);
   }
   $("global-error-text").textContent = msg;
@@ -465,14 +457,7 @@ function createChipDropdown(config) {
       const opt = document.createElement('div');
       opt.className  = 'tag-option' + (selectedIds.has(item.id) ? ' selected' : '');
       opt.dataset.id = item.id;
-      opt.innerHTML = `
-        <span class="tag-option-check">
-          ${selectedIds.has(item.id)
-            ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
-            : ''}
-        </span>
-        ${item.name}
-      `;
+      opt.innerHTML = `<span class="tag-option-check">${selectedIds.has(item.id) ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' : ''}</span>${item.name}`;
       opt.addEventListener('click', () => toggle(item.id));
       panel.appendChild(opt);
     });
@@ -870,11 +855,7 @@ async function pollStatus() {
     if (data.cancellable) {
       if (cancelBtn.classList.contains("hidden")) {
         cancelBtn.disabled  = false;
-        cancelBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="15" y1="9" x2="9" y2="15"/>
-          <line x1="9" y1="9" x2="15" y2="15"/>
-        </svg> OCR abbrechen`;
+        cancelBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> OCR abbrechen';
         cancelBtn.classList.remove("hidden");
         // P4: Fokus auf Cancel-Button beim ersten Einblenden
         cancelBtn.focus();
@@ -952,11 +933,7 @@ async function pollStatus() {
 async function cancelJob() {
   const btn = $("btn-cancel");
   btn.disabled  = true;
-  btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-    <circle cx="12" cy="12" r="10"/>
-    <line x1="15" y1="9" x2="9" y2="15"/>
-    <line x1="9" y1="9" x2="15" y2="15"/>
-  </svg> Wird abgebrochen…`;
+  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> Wird abgebrochen…';
   try {
     await fetch("/api/cancel", { method: "POST" });
   } catch { /* ignore */ }
