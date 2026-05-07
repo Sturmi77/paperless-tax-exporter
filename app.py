@@ -6,6 +6,7 @@ import requests
 import threading
 import time as _time
 from datetime import datetime, date
+from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file
 
 from excel_export import create_excel, update_excel_with_ocr, \
@@ -181,29 +182,36 @@ def get_all_document_types():
 
 def get_documents(date_from, date_to, tag_ids, date_field="created",
                   document_type_ids=None):
-    """Issue #3: date_field = 'created' (Belegdatum) oder 'added' (Scan-Datum)."""
+    """Issue #3: date_field = 'created' (Belegdatum) oder 'added' (Scan-Datum).
+
+    Paginierung folgt der 'next'-URL von Paperless direkt, damit Cursor-basierte
+    Paginierung und alle Filter-Parameter auf jeder Seite erhalten bleiben.
+    """
     documents = []
     params = {
         f"{date_field}__date__gte": date_from,
         f"{date_field}__date__lte": date_to,
         "page_size": 100,
+        "ordering": date_field,  # stabile Sortierung für konsistente Paginierung
     }
     if tag_ids:
         params["tags__id__all"] = ",".join(str(t) for t in tag_ids)
     if document_type_ids:
         params["document_type__id__in"] = ",".join(str(t) for t in document_type_ids)
 
-    path = "/api/documents/"
-    page = 1
-    while path:
-        params["page"] = page
-        data = paperless_get(path, params=params)
-        results = data.get("results", [])
-        documents.extend(results)
-        if data.get("next"):
-            page += 1
-        else:
+    # Erste Seite mit vollen params abrufen
+    data = paperless_get("/api/documents/", params=params)
+    documents.extend(data.get("results", []))
+
+    # Folgeseiten via next-URL – Filter-Parameter sind bereits in der URL enthalten
+    while data.get("next"):
+        parsed = urlparse(data["next"])
+        next_path = parsed.path + ("?" + parsed.query if parsed.query else "")
+        if not next_path.startswith("/api/"):
             break
+        data = paperless_get(next_path)  # keine eigenen params – URL enthält alles
+        documents.extend(data.get("results", []))
+
     return documents
 
 
