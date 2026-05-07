@@ -32,18 +32,37 @@ document.addEventListener("DOMContentLoaded", () => {
   $("new-export-btn").addEventListener("click", resetUI);
 
   // Segmented Control für Datumsfeld (Issue #10)
-  updateDateToggleHint(); // Hilfetext beim initialen Seitenload setzen
-  document.querySelectorAll('.pill-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.pill-btn').forEach(b => {
-        b.classList.remove('pill-active');
-        b.setAttribute('aria-pressed', 'false');
-      });
-      btn.classList.add('pill-active');
-      btn.setAttribute('aria-pressed', 'true');
-      updateDateToggleHint();
+  // A4: ARIA radiogroup-Pattern mit Arrow-Key-Navigation
+  updateDateToggleHint();
+  const pillBtns = Array.from(document.querySelectorAll('.pill-btn'));
+  pillBtns.forEach((btn, idx) => {
+    btn.addEventListener('click', () => activatePill(btn));
+    btn.addEventListener('keydown', e => {
+      let next = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        next = pillBtns[(idx + 1) % pillBtns.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        next = pillBtns[(idx - 1 + pillBtns.length) % pillBtns.length];
+      }
+      if (next) { activatePill(next); next.focus(); }
     });
   });
+
+  function activatePill(btn) {
+    pillBtns.forEach(b => {
+      b.classList.remove('pill-active');
+      b.setAttribute('aria-pressed', 'false');
+      b.setAttribute('tabindex', '-1');
+    });
+    btn.classList.add('pill-active');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.setAttribute('tabindex', '0');
+    updateDateToggleHint();
+  }
+  // Nur aktiven Pill im Tab-Pfad (roving tabindex)
+  pillBtns.forEach(b => b.setAttribute('tabindex', b.classList.contains('pill-active') ? '0' : '-1'));
 });
 
 // --- Verbindungscheck --------------------------------------------------
@@ -61,6 +80,34 @@ function setBadge(state, text, title = "") {
   badge.innerHTML = (BADGE_ICONS[state] || "") + `<span class="badge-label">${text}</span>`;
 }
 
+// S4: Globaler API-Fehler-Banner (Paperless nicht erreichbar)
+function showGlobalError(msg) {
+  let banner = $("global-error-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id        = "global-error-banner";
+    banner.setAttribute("role", "alert");
+    banner.className = "global-error-banner";
+    banner.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span id="global-error-text"></span>
+      <button class="global-error-retry" onclick="checkConnection(); loadTags(); loadDocumentTypes();" title="Erneut versuchen">
+        Verbindung wiederherstellen
+      </button>`;
+    document.querySelector(".main").prepend(banner);
+  }
+  $("global-error-text").textContent = msg;
+  banner.classList.remove("hidden");
+}
+
+function hideGlobalError() {
+  const banner = $("global-error-banner");
+  if (banner) banner.classList.add("hidden");
+}
+
 async function checkConnection() {
   setBadge("checking", "Verbinde…");
   try {
@@ -68,14 +115,18 @@ async function checkConnection() {
     const data = await res.json();
     if (!data.token_configured) {
       setBadge("error", "Token nicht konfiguriert", "PAPERLESS_TOKEN fehlt – bitte .env auf dem NAS anlegen");
+      showGlobalError("PAPERLESS_TOKEN nicht konfiguriert. Bitte .env auf dem NAS anlegen und Container neu starten.");
     } else if (data.paperless_reachable === false) {
       setBadge("error", "Paperless nicht erreichbar", data.error || "");
+      showGlobalError("Paperless NGX ist nicht erreichbar. Bitte Verbindung und URL prüfen.");
     } else {
       const ollama = data.ollama_available ? " · Ollama ✓" : " · Ollama ✗";
       setBadge("ok", "Paperless verbunden" + ollama, data.ollama_status || "");
+      hideGlobalError();
     }
   } catch {
     setBadge("error", "Verbindungsfehler");
+    showGlobalError("Verbindung zur App unterbrochen. Bitte Seite neu laden.");
   }
 }
 
@@ -361,18 +412,23 @@ async function loadTags() {
   }
 }
 
+const EXPORT_BTN_IDS = ["btn-stage0", "btn-stage1", "btn-both", "btn-stage2"];
+
 function enableButtons() {
-  $("btn-stage0").disabled = false;
-  $("btn-stage1").disabled = false;
-  $("btn-both").disabled   = false;
-  $("btn-stage2").disabled = false;
+  // F3: aria-disabled + disabled synchron; Buttons bleiben fokussierbar bis disabled gesetzt
+  EXPORT_BTN_IDS.forEach(id => {
+    const btn = $(id);
+    btn.disabled = false;
+    btn.removeAttribute("aria-disabled");
+  });
 }
 
 function disableButtons() {
-  $("btn-stage0").disabled = true;
-  $("btn-stage1").disabled = true;
-  $("btn-both").disabled   = true;
-  $("btn-stage2").disabled = true;
+  EXPORT_BTN_IDS.forEach(id => {
+    const btn = $(id);
+    btn.disabled = true;
+    btn.setAttribute("aria-disabled", "true");
+  });
 }
 
 // tagDropdown-Handle für externen Zugriff (selectedTags sync)
@@ -414,13 +470,17 @@ function updateInfo() {
   const to   = $("date-to").value;
   const info = $("selected-info");
   if (!from || !to) {
-    info.textContent = "Bitte Datumsbereich wählen.";
+    // F3: erklärender Initialtext warum Buttons inaktiv sind
+    info.textContent = "Datumsbereich wählen, um Export zu starten.";
     return;
   }
   const tagText = selectedTags.size > 0
     ? `${selectedTags.size} Tag(s) ausgewählt`
     : "alle Tags";
-  info.textContent = `${formatDate(from)} – ${formatDate(to)} · ${tagText}`;
+  const doctypeText = (doctypeDropdown && doctypeDropdown.selectedIds.size > 0)
+    ? ` · ${doctypeDropdown.selectedIds.size} Typ(en)`
+    : "";
+  info.textContent = `${formatDate(from)} – ${formatDate(to)} · ${tagText}${doctypeText}`;
 }
 
 function formatDate(iso) {
@@ -631,6 +691,8 @@ async function pollStatus() {
           <line x1="9" y1="9" x2="15" y2="15"/>
         </svg> OCR abbrechen`;
         cancelBtn.classList.remove("hidden");
+        // P4: Fokus auf Cancel-Button beim ersten Einblenden
+        cancelBtn.focus();
       }
       // bereits sichtbar → nichts tun
     } else {
@@ -655,6 +717,23 @@ async function pollStatus() {
       }
     }
 
+    // P3: Phasen-Label in progress-title aktualisieren
+    const titleEl = $("progress-title");
+    if (titleEl && data.stage && !data.done) {
+      const phaseLabels = {
+        stage0: "Excel wird erstellt…",
+        stage1: "PDFs werden heruntergeladen…",
+        stage2: "OCR-Analyse läuft…",
+        both:   "Export läuft…",
+      };
+      const lbl = phaseLabels[data.stage];
+      // Nur ändern wenn sich Phase geändert hat (nicht bei jedem Poll-Tick)
+      if (lbl && titleEl.dataset.phase !== data.stage) {
+        titleEl.textContent   = lbl;
+        titleEl.dataset.phase = data.stage;
+      }
+    }
+
     if (data.done) {
       stopPoll();
       lastLogCount = 0;
@@ -671,7 +750,10 @@ async function pollStatus() {
         bar.style.background = data.cancelled ? "#e69800" : "#2e7d32";
         $("download-area").style.display = "flex";
         const ct = $("progress-title");
-        if (ct) ct.textContent = data.cancelled ? "Job abgebrochen" : "Export abgeschlossen";
+        if (ct) {
+          ct.textContent   = data.cancelled ? "Job abgebrochen" : "Export abgeschlossen";
+          ct.dataset.phase = "done";
+        }
       }
       return; // kein schedulePoll() mehr
     }

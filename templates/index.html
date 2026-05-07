@@ -127,8 +127,9 @@
         </div><!-- /.filter-row -->
 
         <!-- 4. Ausgabepfad + Unterordner (Issue #9) -->
-        <div class="field-group">
-          <label class="field-label" for="subfolder-input">Unterordner</label>
+        <!-- F4: fieldset/legend für semantisches Grouping -->
+        <fieldset class="field-group subfolder-fieldset">
+          <legend class="field-label">Unterordner</legend>
           <p class="field-hint">Optional – z.B. "2024-Q4" oder "Archiv"</p>
           <div class="subfolder-row">
             <div class="output-path output-path-base">
@@ -149,7 +150,7 @@
           </div>
           <div class="subfolder-error error-msg hidden" id="subfolder-error" role="alert"></div>
           <div class="subfolder-preview hidden" id="subfolder-preview" aria-live="polite"></div>
-        </div>
+        </fieldset>
 
         <!-- 5. Aktions-Buttons (Issue #12: Primär + Sekundär-Reihe) -->
         <div class="actions-export">
