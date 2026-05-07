@@ -126,29 +126,29 @@
 
         </div><!-- /.filter-row -->
 
-        <!-- 4. Ausgabepfad + Unterordner (Issue #9) -->
-        <!-- F4: fieldset/legend für semantisches Grouping -->
+        <!-- 4. Ausgabepfad + Unterordner (Issue #9, Issue #12 Schritt 4: Picker) -->
+        <!-- F4: fieldset/legend für semantisches Grouping (Schritt 3) -->
         <fieldset class="field-group subfolder-fieldset">
           <legend class="field-label">Unterordner</legend>
-          <p class="field-hint">Optional – z.B. "2024-Q4" oder "Archiv"</p>
-          <div class="subfolder-row">
+          <p class="field-hint">Optional – Unterordner für die Ausgabedateien auswählen</p>
+          <div class="subfolder-row subfolder-picker-row">
             <div class="output-path output-path-base">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
               </svg>
               <span id="output-path-text">…</span>
             </div>
-            <input
-              type="text"
-              class="input input-subfolder"
-              id="subfolder-input"
-              placeholder="(kein Unterordner)"
-              maxlength="50"
-              autocomplete="off"
-              spellcheck="false"
-            />
+            <!-- Picker-Button + ausgelesener Ordnername -->
+            <button type="button" class="btn btn-secondary btn-picker" id="subfolder-picker-btn"
+                    aria-haspopup="dialog" aria-label="Unterordner auswählen">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span id="subfolder-picker-label">(kein Unterordner)</span>
+            </button>
+            <!-- Hidden input für Formularwert (Kompatibilität mit startExport) -->
+            <input type="hidden" id="subfolder-input" value=""/>
           </div>
-          <div class="subfolder-error error-msg hidden" id="subfolder-error" role="alert"></div>
           <div class="subfolder-preview hidden" id="subfolder-preview" aria-live="polite"></div>
         </fieldset>
 
@@ -286,6 +286,59 @@
       · {{ app_title }} v2.2 · <span id="footer-year"></span>
     </footer>
 
+  </div>
+
+  <!-- Subfolder-Picker Modal (Issue #12, Schritt 4) -->
+  <div id="subfolder-modal" class="modal-overlay hidden"
+       role="dialog" aria-modal="true" aria-labelledby="subfolder-modal-title"
+       aria-describedby="subfolder-modal-desc">
+    <div class="modal modal-subfolder">
+      <div class="modal-header">
+        <h3 class="modal-title" id="subfolder-modal-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          Unterordner auswählen
+        </h3>
+        <button class="modal-close-btn" id="subfolder-modal-close" aria-label="Schließen">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <p class="modal-text" id="subfolder-modal-desc">Wähle einen bestehenden Unterordner oder lege einen neuen an.</p>
+      <div class="subfolder-search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="search" id="subfolder-search" class="subfolder-search-input"
+               placeholder="Suchen…" autocomplete="off" aria-label="Unterordner suchen"/>
+      </div>
+      <ul id="subfolder-list" class="subfolder-list" role="listbox" aria-label="Verfügbare Unterordner">
+        <li class="subfolder-list-empty" aria-live="polite">Lade Unterordner…</li>
+      </ul>
+      <!-- Neuen Ordner anlegen -->
+      <div class="subfolder-new-wrap">
+        <div class="subfolder-new-row">
+          <input type="text" id="subfolder-new-input" class="input subfolder-new-input"
+                 placeholder="Neuer Ordnername" maxlength="50"
+                 autocomplete="off" spellcheck="false"
+                 aria-label="Name für neuen Unterordner"
+                 pattern="[A-Za-z0-9_\-]{1,50}"/>
+          <button class="btn btn-secondary" id="subfolder-new-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Erstellen
+          </button>
+        </div>
+        <div class="subfolder-new-error error-msg hidden" id="subfolder-new-error" role="alert"></div>
+      </div>
+      <div class="modal-actions modal-actions-subfolder">
+        <button class="btn btn-secondary" id="subfolder-modal-cancel">Abbrechen</button>
+        <button class="btn btn-primary" id="subfolder-modal-confirm" disabled>Auswählen</button>
+      </div>
+    </div>
   </div>
 
   <!-- Überschreib-Modal (Issue #4) -->

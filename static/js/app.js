@@ -20,9 +20,9 @@ document.addEventListener("DOMContentLoaded", () => {
   checkConnection();
   updateOutputPath();
 
-  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); validateSubfolderInput(); });
+  $("date-from").addEventListener("change", () => { clearActiveYear(); updateInfo(); updateSubfolderPreview(); });
   $("date-to").addEventListener("change",   () => { clearActiveYear(); updateInfo(); });
-  $("subfolder-input").addEventListener("input", validateSubfolderInput);
+  initSubfolderPicker();
 
   $("btn-stage0").addEventListener("click",  () => startExport("stage0"));
   $("btn-stage1").addEventListener("click",  () => startExport("stage1"));
@@ -130,9 +130,10 @@ async function checkConnection() {
   }
 }
 
-// --- Output-Pfad + Unterordner (Issue #9) ---------------------------------
+// --- Output-Pfad + Unterordner (Issue #9, Issue #12 Schritt 4: Picker) ------
 // Allowlist-Regex (spiegelt Backend-Validierung exakt)
 const SUBFOLDER_RE = /^[A-Za-z0-9_\-]{1,50}$/;
+
 async function updateOutputPath() {
   try {
     const res  = await fetch("/api/config");
@@ -145,34 +146,224 @@ async function updateOutputPath() {
   }
 }
 
+// Liefert den aktuell gewählten Unterordner-Wert (hidden input)
 function getSubfolder() {
   return ($("subfolder-input").value || "").trim();
 }
 
-function validateSubfolderInput() {
+// Pfad-Vorschau unter dem Picker-Button aktualisieren
+function updateSubfolderPreview() {
   const val     = getSubfolder();
-  const errEl   = $("subfolder-error");
   const preview = $("subfolder-preview");
-
   if (!val) {
-    errEl.classList.add("hidden");
     preview.classList.add("hidden");
-    return true;
+    return;
   }
-
-  if (!SUBFOLDER_RE.test(val)) {
-    errEl.textContent = "Nur Buchstaben, Zahlen, _ und - erlaubt (keine Leerzeichen, Schrägstriche, Sonderzeichen).";
-    errEl.classList.remove("hidden");
-    preview.classList.add("hidden");
-    return false;
-  }
-
-  errEl.classList.add("hidden");
-  // Pfad-Vorschau: {Jahr}/{Unterordner}/Belege/
   const year = $("date-from").value ? $("date-from").value.slice(0, 4) : "{Jahr}";
   preview.textContent = `→ ${year}/${val}/Belege/`;
   preview.classList.remove("hidden");
-  return true;
+}
+
+// Picker-Button-Label + hidden input setzen
+function setSubfolderValue(name) {
+  $("subfolder-input").value = name;
+  const label = $("subfolder-picker-label");
+  if (name) {
+    label.textContent = name;
+    label.classList.add("has-value");
+  } else {
+    label.textContent = "(kein Unterordner)";
+    label.classList.remove("has-value");
+  }
+  updateSubfolderPreview();
+}
+
+// ---------------------------------------------------------------------------
+// Subfolder-Picker Modal (Issue #12, Schritt 4)
+// ---------------------------------------------------------------------------
+let _pickerSelectedValue = "";  // aktuell im Modal selektierter Wert
+
+function initSubfolderPicker() {
+  $("subfolder-picker-btn").addEventListener("click", openSubfolderModal);
+}
+
+async function openSubfolderModal() {
+  const modal     = $("subfolder-modal");
+  const list      = $("subfolder-list");
+  const searchEl  = $("subfolder-search");
+  const newInput  = $("subfolder-new-input");
+  const newErr    = $("subfolder-new-error");
+  const confirmBtn = $("subfolder-modal-confirm");
+
+  // Reset Modal-State
+  searchEl.value     = "";
+  newInput.value     = "";
+  newErr.classList.add("hidden");
+  newErr.textContent = "";
+  _pickerSelectedValue = getSubfolder(); // aktuell gesetzter Wert vorselektieren
+  confirmBtn.disabled = false; // immer erlaubt (auch "Kein Unterordner" wählen)
+
+  modal.classList.remove("hidden");
+
+  // Unterordner laden
+  list.innerHTML = '<li class="subfolder-list-empty">Lade Unterordner…</li>';
+  let folders = [];
+  try {
+    const res  = await fetch("/api/subfolders");
+    const data = await res.json();
+    folders = data.subfolders || [];
+  } catch {
+    // Fallback: API nicht erreichbar → leere Liste + Info
+    folders = null;
+  }
+
+  renderFolderList(list, folders, searchEl.value);
+
+  // Fokus auf Suche setzen (erste fokussierbare Element)
+  setTimeout(() => searchEl.focus(), 50);
+
+  // Suche filtern
+  searchEl.addEventListener("input", () => renderFolderList(list, folders, searchEl.value), { once: false });
+
+  // Focus-Trap + Keyboard-Handling
+  function closeModal(confirmed) {
+    modal.classList.add("hidden");
+    document.removeEventListener("keydown", escHandler);
+    modal.removeEventListener("click",     backdropHandler);
+    searchEl.removeEventListener("input",  filterHandler);
+    if (confirmed) {
+      setSubfolderValue(_pickerSelectedValue);
+    }
+    // Fokus zurück auf Picker-Button
+    $("subfolder-picker-btn").focus();
+  }
+
+  function filterHandler() {
+    renderFolderList(list, folders, searchEl.value);
+  }
+  searchEl.addEventListener("input", filterHandler);
+
+  function escHandler(e) {
+    if (e.key === "Escape") closeModal(false);
+  }
+  document.addEventListener("keydown", escHandler);
+
+  function backdropHandler(e) {
+    if (e.target === modal) closeModal(false);
+  }
+  modal.addEventListener("click", backdropHandler);
+
+  $("subfolder-modal-close").onclick  = () => closeModal(false);
+  $("subfolder-modal-cancel").onclick = () => closeModal(false);
+  $("subfolder-modal-confirm").onclick = () => closeModal(true);
+
+  // Neuen Ordner anlegen
+  $("subfolder-new-btn").onclick = async () => {
+    const name = (newInput.value || "").trim();
+    newErr.classList.add("hidden");
+
+    if (!name) {
+      newErr.textContent = "Bitte einen Ordnernamen eingeben.";
+      newErr.classList.remove("hidden");
+      newInput.focus();
+      return;
+    }
+    if (!SUBFOLDER_RE.test(name)) {
+      newErr.textContent = "Nur Buchstaben, Zahlen, _ und - erlaubt (1–50 Zeichen).";
+      newErr.classList.remove("hidden");
+      newInput.focus();
+      return;
+    }
+
+    try {
+      const res  = await fetch("/api/subfolders", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        newErr.textContent = data.error || "Fehler beim Erstellen.";
+        newErr.classList.remove("hidden");
+        return;
+      }
+      // Ordner angelegt → Liste aktualisieren + auswählen
+      if (folders !== null && !folders.includes(name)) {
+        folders.push(name);
+        folders.sort();
+      }
+      newInput.value = "";
+      _pickerSelectedValue = name;
+      renderFolderList(list, folders, searchEl.value);
+    } catch {
+      newErr.textContent = "API nicht erreichbar – Ordner konnte nicht angelegt werden.";
+      newErr.classList.remove("hidden");
+    }
+  };
+
+  // Enter in new-input triggert Erstellen
+  newInput.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); $("subfolder-new-btn").click(); }
+  });
+}
+
+function renderFolderList(list, folders, filter) {
+  list.innerHTML = "";
+  const q = (filter || "").toLowerCase().trim();
+
+  // "Kein Unterordner" Option immer oben
+  const noneItem = document.createElement("li");
+  noneItem.className   = "subfolder-list-item item-none";
+  noneItem.tabIndex    = 0;
+  noneItem.setAttribute("role", "option");
+  noneItem.setAttribute("aria-selected", _pickerSelectedValue === "" ? "true" : "false");
+  noneItem.innerHTML   = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="2" aria-hidden="true">
+    <circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>
+  </svg>(kein Unterordner)`;
+  noneItem.addEventListener("click", () => { _pickerSelectedValue = ""; renderFolderList(list, folders, filter); });
+  noneItem.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); noneItem.click(); } });
+  list.appendChild(noneItem);
+
+  if (folders === null) {
+    // API-Fallback: Nur "kein Unterordner" + Hinweis
+    const fallback = document.createElement("li");
+    fallback.className = "subfolder-list-empty";
+    fallback.textContent = "Unterordner-Liste nicht verfügbar (API nicht erreichbar).";
+    list.appendChild(fallback);
+    return;
+  }
+
+  const filtered = folders.filter(f => !q || f.toLowerCase().includes(q));
+  if (filtered.length === 0 && folders.length > 0) {
+    const empty = document.createElement("li");
+    empty.className = "subfolder-list-empty";
+    empty.textContent = "Keine Treffer für „" + filter + "".";
+    list.appendChild(empty);
+    return;
+  }
+  if (folders.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "subfolder-list-empty";
+    empty.textContent = "Noch keine Unterordner vorhanden – neuen Ordner anlegen.";
+    list.appendChild(empty);
+    return;
+  }
+
+  filtered.forEach(name => {
+    const item = document.createElement("li");
+    item.className  = "subfolder-list-item";
+    item.tabIndex   = 0;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", _pickerSelectedValue === name ? "true" : "false");
+    item.innerHTML  = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+    </svg>${name}`;
+    item.addEventListener("click", () => { _pickerSelectedValue = name; renderFolderList(list, folders, filter); });
+    item.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); item.click(); } });
+    list.appendChild(item);
+  });
 }
 
 // --- Schnellauswahl Kalenderjahre -------------------------------------
@@ -569,11 +760,11 @@ async function startExport(mode) {
   const dateField       = getDateField();
   const subfolder       = getSubfolder();
 
-  // Clientseitige Subfolder-Validierung (Issue #9)
+  // Clientseitige Subfolder-Validierung (Issue #9 / #12):
+  // Picker setzt nur valide Werte (SUBFOLDER_RE). Zur Sicherheit trotzdem prüfen.
   if (subfolder && !SUBFOLDER_RE.test(subfolder)) {
-    $("subfolder-error").textContent = "Ungültiger Unterordner – bitte korrigieren.";
-    $("subfolder-error").classList.remove("hidden");
-    $("subfolder-input").focus();
+    // Sollte durch Picker nicht mehr passieren – trotzdem absichern
+    $("subfolder-picker-btn").focus();
     return;
   }
 
