@@ -12,7 +12,7 @@ läuft als Docker Container auf dem NAS neben der Paperless-Instanz.
 - **Schnellauswahl** Kalenderjahr (aktuelles Jahr + 3 Vorjahre)
 - **Filter** nach Datumsbereich, Tags und Dokumententyp (durchsuchbare Chip-Dropdowns)
 - **Datumsfeld wählbar**: Belegdatum (`created`) oder Scan-Datum (`added`) – mit erklärendem Hilfetext
-- **Auswählbarer Ausgabe-Unterordner**: Freitext mit Allowlist-Validierung + Live-Pfad-Preview
+- **Subfolder-Picker Modal**: Unterordner aus Liste wählen, Suche, neuen Ordner anlegen – mit Allowlist-Validierung und Live-Pfad-Preview
 - **Vollständiger Export**: PDFs herunterladen + Excel + OCR-Analyse (Stufe 1+2)
 - **PDFs & Excel**: Download + Aufstellung ohne OCR
 - **Nur Excel**: Ohne PDF-Download (bei bereits vorhandenen PDFs)
@@ -199,8 +199,9 @@ paperless-tax-exporter/
 │   ├── js/app.js       # Frontend-Logik
 │   └── logo.png        # komm|event Logo
 ├── tests/
-│   ├── test_excel.py   # Excel-Export Tests (49 Tests)
-│   └── test_security.py # Sicherheits- und Allowlist-Tests
+│   ├── test_excel.py          # Excel-Export + Hyperlink-Tests (26 Tests)
+│   ├── test_security.py       # Allowlist-Validierung Subfolder (23 Tests)
+│   └── test_subfolders_api.py # API-Tests GET/POST /api/subfolders (18 Tests)
 ├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
@@ -210,6 +211,45 @@ paperless-tax-exporter/
 ---
 
 ## Changelog
+
+### v2.3.0 (2026-05-07)
+
+**GUI-Verbesserungen** – Issue #12 (alle 4 Schritte)
+
+#### Schritt 1+2 – Layout & UX
+- Logo (`kommevent.at`) + Favicon im Browser-Tab
+- `APP_TITLE` ENV-Variable für konfigurierbaren App-Namen
+- Aktuelles Kalenderjahr automatisch vorausgewählt
+- Tags- und Dokumententyp-Filter nebeneinander (CSS Grid, responsive)
+- Hinweistext inline neben Sektions-Titel (kleiner, gedimmt)
+- Export-Button: Primärbutton volle Breite + Sekundär-Reihe
+- WCAG-konformer Fokus-Ring (`outline: 2px solid`), Touch-Targets min 44px
+- Connection-Badge mit SVG-Icon, ARIA `role=alert/log/progressbar`
+
+#### Schritt 3 – JS/UX-Fixes
+- **A4** Pill-Toggle Arrow-Key-Navigation (ARIA radiogroup, roving tabindex)
+- **F3** `aria-disabled` sync + `selected-info` Initialtext
+- **F4** Subfolder-Row als `<fieldset>`/`<legend>` (semantisches Grouping)
+- **S4** Globaler Error-Banner (`role=alert`) bei API-Verbindungsproblemen
+- **P3** Phasen-Label in `progress-title` bei Stage-Wechsel
+- **P4** Fokus auf `btn-cancel` beim ersten Einblenden
+
+#### Schritt 4 – Subfolder-Picker Modal
+- Freitext-Eingabe durch Picker-Button mit Modal ersetzt
+- **`GET /api/subfolders`** – listet Unterverzeichnisse von `OUTPUT_DIR` (Allowlist-gefiltert, alphabetisch)
+- **`POST /api/subfolders`** – legt neuen Ordner an (`_validate_subfolder` + `_assert_output_path`)
+- Modal: Ordnerliste (`role=listbox`), Suchfeld (Echtzeit-Filter), Neuen-Ordner-Erstellen-Bereich
+- „Kein Unterordner" als Reset-Option, Fallback wenn API nicht erreichbar
+- Focus-Trap (Escape, Backdrop-Klick, X-Button), Fokus-Rückgabe an Picker-Button
+
+#### Bugfixes
+- **Paginierungsbug** – `next`-URL direkt folgen statt `page=N` (Dokumente außerhalb Datumsbereich erschienen)
+- **Webkit SyntaxError** – alle mehrzeiligen Template-Literals in `innerHTML`-Strings auf einzeilig umgestellt
+- **Typografische Anführungszeichen** – U+201E `„` in JS-Strings durch ASCII ersetzt (Webkit-Kompatibilität)
+
+**Tests:** 67/67 (vorher: 49) – 18 neue API-Tests für `GET/POST /api/subfolders`
+
+---
 
 ### v2.2.0 (2026-04-19)
 - **Issue #7** – Dokumententyp als Filterkriterium auswählbar (Chip-Dropdown, analog Tags)
@@ -228,15 +268,15 @@ paperless-tax-exporter/
 
 ## Roadmap
 
-### v2.3 – GUI-Verbesserungen *(geplant)*
+### v2.3 – GUI-Verbesserungen *(released als v2.3.0)*
+
+Alle Features aus Issue #12 implementiert und released. Siehe Changelog v2.3.0.
+
+### v2.4 – ETA-Anzeige & UX-Feinschliff *(geplant)*
 
 | # | Feature |
 |---|---------|
-| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Logo + Favicon, konfigurierbarer App-Name (`APP_TITLE`) |
-| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Tags- und Dokumententyp-Filter nebeneinander (Responsive Layout) |
-| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Subfolder-Picker als Modal (Ordnerstruktur auswählen + neuen Ordner anlegen) |
-| [#12](https://github.com/Sturmi77/paperless-tax-exporter/issues/12) | Hinweistext in Kopfzeile inline, aktuelles Kalenderjahr vorausgewählt |
-| [#19](https://github.com/Sturmi77/paperless-tax-exporter/issues/19) | Fortschrittsanzeige (Ø-Zeit + ETA) in allen Export-Stufen |
+| [#19](https://github.com/Sturmi77/paperless-tax-exporter/issues/19) | Fortschrittsanzeige (Ø-Zeit + ETA) in allen Export-Stufen (Stufe 0, 1, 2) |
 
 ### v3.0 – Rudimentäre Buchhaltung *(Konzeptphase)*
 
