@@ -327,7 +327,7 @@ function renderFolderList(list, folders, filter) {
   if (filtered.length === 0 && folders.length > 0) {
     const empty = document.createElement("li");
     empty.className = "subfolder-list-empty";
-    empty.textContent = "Keine Treffer für „" + filter + "".";
+    empty.textContent = 'Keine Treffer für ' + '"' + filter + '".';
     list.appendChild(empty);
     return;
   }
