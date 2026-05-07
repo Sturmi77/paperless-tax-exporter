@@ -688,6 +688,55 @@ def api_health():
     return jsonify(status)
 
 
+# ── Subfolder-Picker API (Issue #12, Schritt 4) ──────────────────────────────
+@app.route("/api/subfolders")
+def api_subfolders_list():
+    """
+    GET /api/subfolders
+    Gibt alle direkten Unterverzeichnisse von OUTPUT_DIR zurueck (alphabetisch).
+    Keine Rekursion, nur eine Ebene tief.
+    """
+    try:
+        real_output = os.path.realpath(OUTPUT_DIR)
+        if not os.path.isdir(real_output):
+            return jsonify({"subfolders": []})
+        names = sorted(
+            entry.name
+            for entry in os.scandir(real_output)
+            if entry.is_dir(follow_symlinks=False)
+            and re.fullmatch(r"[A-Za-z0-9_\-]{1,50}", entry.name)
+        )
+        return jsonify({"subfolders": names})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/subfolders", methods=["POST"])
+def api_subfolders_create():
+    """
+    POST /api/subfolders  {"name": "<ordnername>"}
+    Legt einen neuen Unterordner in OUTPUT_DIR an.
+    Validiert via Allowlist (_validate_subfolder) + _assert_output_path.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    raw_name = data.get("name", "") or ""
+    try:
+        name = _validate_subfolder(raw_name)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not name:
+        return jsonify({"error": "Ordnername darf nicht leer sein."}), 400
+    try:
+        target = os.path.join(OUTPUT_DIR, name)
+        _assert_output_path(target)
+        os.makedirs(target, exist_ok=True)
+        return jsonify({"created": name}), 201
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/download-excel")
 def api_download_excel():
     with job_lock:

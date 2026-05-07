@@ -282,6 +282,34 @@ body {
   font-weight: 500;
 }
 
+/* Subfolder-Picker Button (Issue #12, Schritt 4) */
+.subfolder-picker-row {
+  flex-wrap: nowrap;
+}
+.btn-picker {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 7px;
+  text-align: left;
+  font-size: .88rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.btn-picker svg { flex-shrink: 0; }
+#subfolder-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+#subfolder-picker-label.has-value {
+  color: var(--primary-hov);
+  font-weight: 600;
+}
+
 
 
 /* ─── Aktionen ─────────────────────────────────────────────────────── */
@@ -695,6 +723,135 @@ body {
   font-weight: 700;
   color: var(--dark);
   margin-bottom: 10px;
+}
+
+/* Subfolder-Modal Header mit Close-Button */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.modal-header .modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+}
+.modal-close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  transition: color .15s;
+}
+.modal-close-btn:hover { color: var(--dark); }
+.modal-close-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Subfolder-Modal spezifisch */
+.modal-subfolder {
+  max-width: 420px;
+  padding: 24px;
+}
+.subfolder-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin: 12px 0 8px;
+}
+.subfolder-search-wrap svg { color: var(--text-muted); flex-shrink: 0; }
+.subfolder-search-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  flex: 1;
+  font-size: .88rem;
+  font-family: inherit;
+  color: var(--text);
+}
+.subfolder-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+.subfolder-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  font-size: .88rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  transition: background .1s;
+  min-height: 40px;
+}
+.subfolder-list-item:last-child { border-bottom: none; }
+.subfolder-list-item:hover,
+.subfolder-list-item:focus {
+  background: var(--primary-pale);
+  outline: none;
+}
+.subfolder-list-item[aria-selected="true"] {
+  background: var(--primary-pale);
+  color: var(--primary-hov);
+  font-weight: 600;
+}
+.subfolder-list-item svg { color: var(--primary); flex-shrink: 0; }
+.subfolder-list-empty {
+  padding: 16px 12px;
+  font-size: .85rem;
+  color: var(--text-muted);
+  text-align: center;
+  font-style: italic;
+}
+
+/* "Kein Unterordner" Reset-Option */
+.subfolder-list-item.item-none {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.subfolder-list-item.item-none[aria-selected="true"] {
+  color: var(--primary-hov);
+  font-style: normal;
+}
+
+/* Neuer Ordner Block */
+.subfolder-new-wrap {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.subfolder-new-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.subfolder-new-input {
+  flex: 1;
+  font-size: .88rem;
+  padding: 7px 10px;
+}
+
+/* Modal-Actions rechtsbuendig fuer Subfolder-Modal */
+.modal-actions-subfolder {
+  justify-content: flex-end;
 }
 .modal-text {
   font-size: .9rem;
