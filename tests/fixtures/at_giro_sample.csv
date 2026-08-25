@@ -1,0 +1,5 @@
+﻿IBAN;Auszugsnummer;Buchungsdatum;Valutadatum;Umsatzzeit;Zahlungsreferenz;Waehrung;Betrag;Buchungstext;Umsatztext;Name des Partners;Name des ultimate Partners;Name des ultimate Auftraggebers;Creditor ID;Mandat ID;Kontoverbindung des Partners;Partner BIC;Auftraggeberreferenz;Verwendungszweck;Kategorie;Notiz;Original Auftragsbetrag;Original Währung;Bestandskategorie;Umsatzkategorie;Entgeltinformationen;Eigene Referenz;Relevant
+AT000000000000000000;1;2025-03-15;2025-03-15;;;EUR;-42,50;SEPA-Lastschrift;ACME GmbH Rechnung 123;ACME GmbH;;;;;AT111111111111111111;BKAUATWW;;Rechnung 123 ACME;Sonstiges;;;;;;;;
+AT000000000000000000;1;2025-03-20;2025-03-20;;;EUR;-10,00;SEPA-Lastschrift;Other Corp;Other Corp;;;;;AT222222222222222222;BKAUATWW;;Something else;Sonstiges;;;;;;;;
+AT000000000000000000;1;2025-04-01;2025-04-01;;;EUR;100,00;SEPA-Gutschrift;Gehalt;Employer AG;;;;;AT333333333333333333;BKAUATWW;;GEHALT;Einkünfte;;;;;;;;
+AT000000000000000000;1;2025-03-18;2025-03-18;;;EUR;-42,50;SEPA-Lastschrift;ACME Doppel;ACME GmbH;;;;;AT111111111111111111;BKAUATWW;;Rechnung 123 Duplikat;Sonstiges;;;;;;;;X
