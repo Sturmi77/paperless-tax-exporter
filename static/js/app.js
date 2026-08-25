@@ -30,6 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btn-stage2").addEventListener("click",  () => startExport("stage2"));
   $("btn-cancel").addEventListener("click",  cancelJob);
   $("new-export-btn").addEventListener("click", resetUI);
+  initBankMatchUI();
 
   // Segmented Control für Datumsfeld (Issue #10)
   // A4: ARIA radiogroup-Pattern mit Arrow-Key-Navigation
@@ -762,6 +763,7 @@ async function startExport(mode) {
   };
 
   $("config-card").classList.add("hidden");
+  $("bank-match-card").classList.add("hidden");
   $("progress-card").classList.remove("hidden");
   $("download-area").style.display = "none";
   $("s0-progress").classList.add("hidden");
@@ -1023,6 +1025,7 @@ function resetToConfig() {
   stopPoll();
   $("progress-card").classList.add("hidden");
   $("config-card").classList.remove("hidden");
+  $("bank-match-card").classList.remove("hidden");
   enableButtons();
 }
 
@@ -1030,6 +1033,7 @@ function resetUI() {
   stopPoll();
   $("progress-card").classList.add("hidden");
   $("config-card").classList.remove("hidden");
+  $("bank-match-card").classList.remove("hidden");
   $("progress-bar").style.width      = "0%";
   $("progress-bar").style.background = "var(--primary)";
   $("progress-bar").className        = "progress-bar";
@@ -1041,4 +1045,145 @@ function resetUI() {
   $("btn-cancel").classList.add("hidden");
   lastLogCount = 0;
   enableButtons();
+}
+
+// --- Issue #25: Kontoauszug-Matching ---------------------------------
+let bankUploadKey = null;
+
+function initBankMatchUI() {
+  const y = $("bank-year");
+  if (y && !y.value) y.value = String(new Date().getFullYear());
+  const bp = $("btn-bank-preview");
+  const bd = $("btn-bank-dryrun");
+  const ba = $("btn-bank-apply");
+  if (bp) bp.addEventListener("click", () => bankCsvPreview());
+  if (bd) bd.addEventListener("click", () => bankCsvMatch(true));
+  if (ba) ba.addEventListener("click", () => bankCsvMatch(false));
+}
+
+function bankMatchShowMsg(text, isError) {
+  const el = $("bank-match-msg");
+  if (!el) return;
+  if (!text) { el.classList.add("hidden"); el.textContent = ""; return; }
+  el.textContent = text;
+  el.classList.remove("hidden");
+  el.style.color = isError ? "#e53e3e" : "#1a6478";
+}
+
+function renderBankMatchResult(data) {
+  const box = $("bank-match-result");
+  if (!box) return;
+  const s = data.stats || {};
+  let html = '<div class="bank-stats">';
+  html += "<strong>Vorschau:</strong> " + (data.dry_run ? "Dry-Run" : "Geschrieben") + " · ";
+  html += "Rechnungen: " + (s.invoices || 0) + " · ";
+  html += "gefunden: " + (s.gefunden || 0) + " · ";
+  html += "mehrdeutig: " + (s.mehrdeutig || 0) + " · ";
+  html += "nicht gefunden: " + (s.nicht_gefunden || 0);
+  html += "</div>";
+  if (data.filtered_bank_file) {
+    const year = ($("bank-year") && $("bank-year").value) || "";
+    html += '<p><a class="btn btn-secondary" href="/api/bank-csv/download-filtered?year=' + encodeURIComponent(year) + '">Gefilterten Kontoauszug laden</a></p>';
+  }
+  if ((data.matches || []).length) {
+    html += "<details open><summary>Gefunden (" + data.matches.length + ")</summary><ul>";
+    data.matches.slice(0, 20).forEach(function (m) {
+      html += "<li>Beleg " + (m.beleg_nr || "?") + " → " + (m.date || "") + " · " + (m.text || "").slice(0, 80) + "</li>";
+    });
+    html += "</ul></details>";
+  }
+  if ((data.ambiguous || []).length) {
+    html += "<details><summary>Mehrdeutig (" + data.ambiguous.length + ")</summary><ul>";
+    data.ambiguous.slice(0, 15).forEach(function (a) {
+      html += "<li>Beleg " + (a.beleg_nr || "?") + " · " + (a.candidates || []).length + " Kandidaten</li>";
+    });
+    html += "</ul></details>";
+  }
+  if ((data.unmatched || []).length) {
+    html += "<details><summary>Nicht gefunden (" + data.unmatched.length + ")</summary><ul>";
+    data.unmatched.slice(0, 20).forEach(function (u) {
+      html += "<li>Beleg " + (u.beleg_nr || "?") + " · " + (u.beschreibung || u.absender || "") + "</li>";
+    });
+    html += "</ul></details>";
+  }
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+}
+
+async function bankCsvPreview() {
+  bankMatchShowMsg("");
+  const fileInput = $("bank-csv-file");
+  const year = ($("bank-year") && $("bank-year").value.trim()) || "";
+  if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+    bankMatchShowMsg("Bitte CSV-Datei waehlen.", true);
+    return;
+  }
+  if (!year) {
+    bankMatchShowMsg("Bitte Jahr angeben.", true);
+    return;
+  }
+  const fd = new FormData();
+  fd.append("file", fileInput.files[0]);
+  fd.append("year_label", year);
+  try {
+    const res = await fetch("/api/bank-csv/preview", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      bankMatchShowMsg(data.error || "Preview fehlgeschlagen", true);
+      return;
+    }
+    bankUploadKey = data.upload_key || data.saved_path;
+    bankMatchShowMsg(
+      "CSV OK · Preset: " + (data.preset || "?") + " · Delimiter: " + (data.delimiter || "?") +
+      " · Spalten: " + (data.fieldnames || []).length + " · Key: " + bankUploadKey,
+      false
+    );
+  } catch (err) {
+    bankMatchShowMsg("Verbindungsfehler: " + err.message, true);
+  }
+}
+
+async function bankCsvMatch(dryRun) {
+  bankMatchShowMsg("");
+  const year = ($("bank-year") && $("bank-year").value.trim()) || "";
+  if (!year) {
+    bankMatchShowMsg("Bitte Jahr angeben.", true);
+    return;
+  }
+  const fileInput = $("bank-csv-file");
+  const fd = new FormData();
+  fd.append("year_label", year);
+  fd.append("dry_run", dryRun ? "true" : "false");
+  fd.append("debits_only", ($("bank-debits-only") && $("bank-debits-only").checked) ? "true" : "false");
+  fd.append("only_relevant", ($("bank-only-relevant") && $("bank-only-relevant").checked) ? "true" : "false");
+  if (fileInput && fileInput.files && fileInput.files[0]) {
+    fd.append("file", fileInput.files[0]);
+  } else if (bankUploadKey) {
+    fd.append("upload_key", bankUploadKey);
+  } else {
+    bankMatchShowMsg("Bitte zuerst CSV waehlen (oder CSV pruefen).", true);
+    return;
+  }
+  if (!dryRun) {
+    const ok = window.confirm("Zuordnungen ins Excel schreiben und gefilterten Kontoauszug erzeugen?");
+    if (!ok) return;
+  }
+  try {
+    const res = await fetch("/api/bank-csv/match", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      bankMatchShowMsg(data.error || "Matching fehlgeschlagen", true);
+      return;
+    }
+    if (data.upload_key) bankUploadKey = data.upload_key;
+    renderBankMatchResult(data);
+    bankMatchShowMsg(
+      dryRun
+        ? "Dry-Run abgeschlossen – noch nichts geschrieben."
+        : ("Geschrieben. Excel-Updates: " + (data.excel_updated || 0)),
+      false
+    );
+  } catch (err) {
+    bankMatchShowMsg("Verbindungsfehler: " + err.message, true);
+  }
 }

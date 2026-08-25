@@ -10,9 +10,13 @@ from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file
 
 from excel_export import create_excel, update_excel_with_ocr, \
-                         append_to_excel, get_existing_doc_ids
+                         append_to_excel, get_existing_doc_ids, \
+                         read_invoices_for_matching, update_excel_with_bank_matches, \
+                         write_filtered_bank_xlsx
 from pdf_export import download_pdfs
 from llm_extract import extract_from_ocr, check_ollama_available
+from bank_csv import parse_bank_csv, csv_preview
+from matching_csv import match_invoices_to_bank
 
 app = Flask(__name__)
 
@@ -808,6 +812,169 @@ def api_download_excel():
         return jsonify({"error": "Zugriff verweigert."}), 403
     return send_file(path, as_attachment=True,
                      download_name=os.path.basename(path))
+
+
+# ── Issue #25: Kontoauszug-Matching ───────────────────────────────────
+
+def _excel_path_for_year(year_label: str, subfolder: str = "") -> str:
+    """Rechnungs-Excel liegt unter OUTPUT_DIR/{year}/ (Subfolder betrifft nur PDFs)."""
+    year_label = re.sub(r"[^\w\-]", "", year_label or "")
+    if not year_label:
+        raise ValueError("Jahr fehlt.")
+    path = os.path.join(OUTPUT_DIR, year_label, f"Rechnungsaufstellung_{year_label}.xlsx")
+    _assert_output_path(path)
+    return path
+
+
+def _save_uploaded_csv(file_storage, year_label: str) -> str:
+    """Speichert Upload unter OUTPUT_DIR/_uploads/ (Allowlist-Dateiname)."""
+    upload_dir = os.path.join(OUTPUT_DIR, "_uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    _assert_output_path(upload_dir)
+    orig = file_storage.filename or "kontoauszug.csv"
+    base = os.path.basename(orig)
+    safe = re.sub(r"[^A-Za-z0-9_\.\-]", "_", base)[:120]
+    if not safe.lower().endswith(".csv"):
+        safe += ".csv"
+    target = os.path.join(upload_dir, f"{year_label}_{safe}")
+    _assert_output_path(target)
+    file_storage.save(target)
+    return target
+
+
+def _serialize_match_result(result: dict) -> dict:
+    """JSON-tauglich machen (date → iso)."""
+    def _ser_match(m):
+        out = dict(m)
+        d = out.get("date")
+        if hasattr(d, "isoformat"):
+            out["date"] = d.isoformat()
+        return out
+
+    def _ser_inv(inv):
+        out = dict(inv)
+        d = out.get("re_dat")
+        if hasattr(d, "isoformat"):
+            out["re_dat"] = d.isoformat()
+        # candidates bereits serialisiert
+        return out
+
+    return {
+        "matches": [_ser_match(m) for m in result.get("matches", [])],
+        "ambiguous": [_ser_inv(a) for a in result.get("ambiguous", [])],
+        "unmatched": [_ser_inv(u) for u in result.get("unmatched", [])],
+        "stats": result.get("stats", {}),
+    }
+
+
+@app.route("/api/bank-csv/preview", methods=["POST"])
+def api_bank_csv_preview():
+    """CSV-Upload → Header, Preset, Sample-Zeilen."""
+    year = (request.form.get("year_label") or request.form.get("year") or "").strip()
+    year = re.sub(r"[^\w\-]", "", year) or "preview"
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "Keine CSV-Datei hochgeladen."}), 400
+    try:
+        path = _save_uploaded_csv(f, year)
+        preview = csv_preview(path)
+        preview["saved_path"] = os.path.basename(path)
+        preview["upload_key"] = os.path.basename(path)
+        return jsonify(preview)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/bank-csv/match", methods=["POST"])
+def api_bank_csv_match():
+    """
+    Matching durchführen (dry_run oder apply).
+
+    JSON oder multipart:
+      year_label, upload_key|file, debits_only=true, only_relevant=false,
+      dry_run=true, subfolder=""
+    """
+    if request.content_type and "multipart/form-data" in request.content_type:
+        data = request.form.to_dict()
+        f = request.files.get("file")
+    else:
+        data = request.get_json(force=True, silent=True) or {}
+        f = None
+
+    year_label = re.sub(r"[^\w\-]", "", (data.get("year_label") or data.get("year") or ""))
+    if not year_label:
+        return jsonify({"error": "year_label fehlt."}), 400
+
+    dry_run = str(data.get("dry_run", "true")).lower() in ("1", "true", "yes")
+    debits_only = str(data.get("debits_only", "true")).lower() in ("1", "true", "yes")
+    only_relevant = str(data.get("only_relevant", "false")).lower() in ("1", "true", "yes")
+    subfolder = data.get("subfolder") or ""
+
+    try:
+        excel_path = _excel_path_for_year(year_label, subfolder)
+        if not os.path.exists(excel_path):
+            return jsonify({"error": f"Excel nicht gefunden: Rechnungsaufstellung_{year_label}.xlsx"}), 404
+
+        if f and f.filename:
+            csv_path = _save_uploaded_csv(f, year_label)
+        else:
+            key = data.get("upload_key") or data.get("saved_path") or ""
+            key = os.path.basename(key)
+            if not key or not re.fullmatch(r"[A-Za-z0-9_\.\-]{1,140}", key):
+                return jsonify({"error": "upload_key fehlt oder ungültig. Zuerst Preview/Upload."}), 400
+            csv_path = os.path.join(OUTPUT_DIR, "_uploads", key)
+            _assert_output_path(csv_path)
+            if not os.path.isfile(csv_path):
+                return jsonify({"error": "Hochgeladene CSV nicht gefunden."}), 404
+
+        bank_rows = parse_bank_csv(
+            csv_path, debits_only=debits_only, only_relevant=only_relevant
+        )
+        invoices = read_invoices_for_matching(excel_path)
+        result = match_invoices_to_bank(invoices, bank_rows)
+
+        filtered_path = None
+        excel_updated = 0
+        if not dry_run:
+            excel_updated = update_excel_with_bank_matches(excel_path, result)
+            filtered_name = f"Kontoauszug_gefiltert_{year_label}.xlsx"
+            filtered_path = os.path.join(os.path.dirname(excel_path), filtered_name)
+            _assert_output_path(filtered_path)
+            write_filtered_bank_xlsx(bank_rows, result, filtered_path)
+            with job_lock:
+                job_status["excel_path"] = excel_path
+
+        payload = _serialize_match_result(result)
+        payload["dry_run"] = dry_run
+        payload["excel_path"] = excel_path
+        payload["excel_updated"] = excel_updated
+        payload["filtered_bank_file"] = (
+            os.path.basename(filtered_path) if filtered_path else None
+        )
+        payload["bank_rows_total"] = len(bank_rows)
+        payload["bank_rows_selected"] = sum(1 for b in bank_rows if b.get("selected"))
+        return jsonify(payload)
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/bank-csv/download-filtered")
+def api_bank_csv_download_filtered():
+    year = re.sub(r"[^\w\-]", "", request.args.get("year", ""))
+    subfolder = request.args.get("subfolder") or ""
+    if not year:
+        return jsonify({"error": "year fehlt."}), 400
+    try:
+        excel_path = _excel_path_for_year(year, subfolder)
+        path = os.path.join(os.path.dirname(excel_path), f"Kontoauszug_gefiltert_{year}.xlsx")
+        _assert_output_path(path)
+        if not os.path.exists(path):
+            return jsonify({"error": "Gefilterter Kontoauszug nicht gefunden."}), 404
+        return send_file(path, as_attachment=True, download_name=os.path.basename(path))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 if __name__ == "__main__":

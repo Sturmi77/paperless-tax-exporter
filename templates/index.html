@@ -223,6 +223,50 @@
 
       </section>
 
+      <!-- Issue #25: Kontoauszug zuordnen (Nachbearbeitung) -->
+      <section class="card" id="bank-match-card">
+        <div class="card-title-row">
+          <h2 class="card-title">Kontoauszug zuordnen</h2>
+          <span class="card-title-hint">
+            CSV-Buchungen mit Rechnungszeilen (leeres Zahlungsdatum) abgleichen – Issue #25
+          </span>
+        </div>
+
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label" for="bank-year">Jahr (Excel)</label>
+            <input class="input" type="text" id="bank-year" placeholder="2025" maxlength="10"
+                   autocomplete="off" aria-describedby="bank-year-hint"/>
+            <p class="field-hint" id="bank-year-hint">Entspricht dem Ordner unter dem Ausgabe-Pfad</p>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="bank-csv-file">Kontoauszug (CSV)</label>
+            <input class="input" type="file" id="bank-csv-file" accept=".csv,text/csv"
+                   aria-label="Kontoauszug CSV hochladen"/>
+          </div>
+        </div>
+
+        <div class="bank-match-options">
+          <label class="check-label">
+            <input type="checkbox" id="bank-debits-only" checked/>
+            Nur Abbuchungen (Betrag &lt; 0)
+          </label>
+          <label class="check-label">
+            <input type="checkbox" id="bank-only-relevant"/>
+            Nur Zeilen mit Spalte Relevant = X
+          </label>
+        </div>
+
+        <div class="actions actions-secondary" style="margin-top:12px;">
+          <button class="btn btn-secondary" id="btn-bank-preview" type="button">CSV prüfen</button>
+          <button class="btn btn-secondary" id="btn-bank-dryrun" type="button">Vorschau Matching</button>
+          <button class="btn btn-primary" id="btn-bank-apply" type="button">Zuordnung schreiben</button>
+        </div>
+
+        <div id="bank-match-msg" class="error-msg hidden" role="alert" style="margin-top:10px;"></div>
+        <div id="bank-match-result" class="bank-match-result hidden" aria-live="polite"></div>
+      </section>
+
       <!-- Job-Fortschritt -->
       <section class="card hidden" id="progress-card">
         <h2 class="card-title" id="progress-title">Export wird durchgeführt…</h2>

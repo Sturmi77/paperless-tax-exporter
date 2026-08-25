@@ -1027,4 +1027,39 @@ body {
   width: 100%;
   margin-bottom: 4px;
 }
+
+/* ─── Issue #25: Kontoauszug-Matching ──────────────────────────────── */
+.bank-match-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  margin-top: 8px;
+}
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .9rem;
+  color: var(--text, #333);
+  cursor: pointer;
+}
+.bank-match-result {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: #f0f7f8;
+  border: 1.5px solid #c5d2d4;
+  border-radius: 6px;
+  font-size: .88rem;
+  color: #333;
+}
+.bank-match-result details {
+  margin-top: 8px;
+}
+.bank-match-result ul {
+  margin: 6px 0 0 1.1em;
+  padding: 0;
+}
+.bank-match-result .bank-stats {
+  margin-bottom: 6px;
+}
 .subfolder-fieldset legend + * { clear: both; }
