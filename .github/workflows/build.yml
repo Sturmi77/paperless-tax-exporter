@@ -1,13 +1,20 @@
 name: Build & Push Docker Image
 
+# Jeder Push auf main/develop baut und pusht ein Image.
+# PR-Merges erzeugen einen Push auf den Ziel-Branch → Image wird automatisch gebaut.
+# Zusätzlich: Git-Tags v*.*.* und manueller Start (workflow_dispatch).
 on:
   push:
     branches:
       - main
-      - develop          # develop wird gebaut aber nicht als :latest getaggt
+      - develop
     tags:
       - "v*.*.*"
-  workflow_dispatch:        # Manueller Trigger aus GitHub UI möglich
+  workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
@@ -30,14 +37,15 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Bei Push auf main → :latest (stabile Version)
+            # Merge/Push auf main → :latest und :main
             type=raw,value=latest,enable={{is_default_branch}}
-            # Bei Git-Tag v1.2.3 → :1.2.3 und :1.2 und :1
+            type=raw,value=main,enable={{is_default_branch}}
+            # Git-Tag v1.2.3 → :1.2.3 und :1.2
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # develop Branch → :develop (zum Testen, überschreibt nicht :latest)
+            # develop → :develop (überschreibt nicht :latest)
             type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
-            # Immer auch den Commit-SHA als Tag
+            # Jeder Build: eindeutiger Commit-SHA-Tag
             type=sha,prefix=sha-
 
       - name: Set up Docker Buildx
@@ -48,7 +56,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}   # Automatisch vorhanden, kein manuelles Secret nötig
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -58,4 +66,4 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
-          build-args: CACHEBUST=${{ github.sha }}  # Jeder Commit = neuer Hash = Cache-Bust bei COPY
+          build-args: CACHEBUST=${{ github.sha }}
