@@ -37,9 +37,12 @@ def download_pdfs(
     paperless_url: str,
     token: str,
     log_fn=None,
+    progress_fn=None,
 ) -> dict:
     """
     Lädt alle PDFs herunter.
+
+    progress_fn: optional callable(idx, total, title) – Fortschritt pro Dokument (Issue #19)
 
     Rückgabe: {doc_id: filename}  (nur Dateiname, nicht vollständiger Pfad)
     """
@@ -49,6 +52,10 @@ def download_pdfs(
 
     for idx, doc in enumerate(documents, start=1):
         doc_id = doc.get("id")
+        title = doc.get("title", f"Dokument {doc_id}")
+        if progress_fn:
+            progress_fn(idx, total, title)
+
         filename = _make_pdf_filename(doc)
         target_path = os.path.join(pdf_folder, filename)
 

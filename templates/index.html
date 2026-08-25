@@ -233,6 +233,36 @@
                aria-label="Export-Fortschritt"></div>
         </div>
 
+        <!-- Stage-0-Fortschritt (Excel) – Issue #19 -->
+        <div id="s0-progress" class="ocr-progress hidden">
+          <div class="ocr-progress-label">
+            <span id="s0-counter">0 / 0</span>
+            <span id="s0-doc-title" class="ocr-doc-title"></span>
+          </div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar progress-bar-ocr" id="progress-bar-s0"></div>
+          </div>
+          <div class="ocr-timing" id="s0-timing">
+            <span id="s0-avg-time"></span>
+            <span id="s0-eta"></span>
+          </div>
+        </div>
+
+        <!-- Stage-1-Fortschritt (PDF-Download) – Issue #19 -->
+        <div id="s1-progress" class="ocr-progress hidden">
+          <div class="ocr-progress-label">
+            <span id="s1-counter">0 / 0</span>
+            <span id="s1-doc-title" class="ocr-doc-title"></span>
+          </div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar progress-bar-ocr" id="progress-bar-s1"></div>
+          </div>
+          <div class="ocr-timing" id="s1-timing">
+            <span id="s1-avg-time"></span>
+            <span id="s1-eta"></span>
+          </div>
+        </div>
+
         <!-- OCR-Fortschritt (nur Stufe 2) -->
         <div id="ocr-progress" class="ocr-progress hidden">
           <div class="ocr-progress-label">

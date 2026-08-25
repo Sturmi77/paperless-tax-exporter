@@ -133,7 +133,8 @@ def _build_cell_formula(subfolder_path: str) -> str:
 
 def create_excel(documents, pdf_map, output_path, year_label,
                  unc_base=None, ocr_results=None, subfolder: str = "",
-                 hyperlink_mode: str = "cell", include_text_path: bool = False):
+                 hyperlink_mode: str = "cell", include_text_path: bool = False,
+                 progress_fn=None):
     """
     Erstellt die Excel-Datei im Steuerberater-Format (Stufe 1).
 
@@ -146,6 +147,7 @@ def create_excel(documents, pdf_map, output_path, year_label,
     subfolder:         optionaler Unterordner (Allowlist-validiert, default="")
     hyperlink_mode:    "cell" = CELL()-Formel (portabel); "unc" = absoluter UNC-Pfad (Issue #8)
     include_text_path: True = Spalte K mit kopierbarem UNC-Pfad (Issue #8)
+    progress_fn:       optional callable(idx, total, title) – Fortschritt pro Zeile (Issue #19)
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -179,11 +181,14 @@ def create_excel(documents, pdf_map, output_path, year_label,
         key=lambda d: d.get("created", "1900-01-01") or "1900-01-01"
     )
     ocr = ocr_results or {}
+    total_docs = len(sorted_docs)
 
     for i, doc in enumerate(sorted_docs):
         row = data_start_row + i
         ws.row_dimensions[row].height = 18
         doc_id = doc.get("id")
+        if progress_fn:
+            progress_fn(i + 1, total_docs, doc.get("title", f"Dokument {doc_id}"))
 
         # A: Beleg-Nr.
         beleg_nr = doc.get("archive_serial_number") or doc_id
