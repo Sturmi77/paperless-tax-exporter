@@ -764,16 +764,22 @@ async function startExport(mode) {
   $("config-card").classList.add("hidden");
   $("progress-card").classList.remove("hidden");
   $("download-area").style.display = "none";
+  $("s0-progress").classList.add("hidden");
+  $("s1-progress").classList.add("hidden");
   $("ocr-progress").classList.add("hidden");
   $("btn-cancel").classList.add("hidden");
 
   const titleEl = $("progress-title");
-  if (titleEl) titleEl.textContent = titles[mode] || "Export läuft…";
+  if (titleEl) {
+    titleEl.textContent = titles[mode] || "Export läuft…";
+    delete titleEl.dataset.phase;
+  }
 
   const bar = $("progress-bar");
   bar.className     = "progress-bar indeterminate";
   bar.style.width   = "";
   bar.style.background = "";
+  bar.setAttribute("aria-valuenow", "0");
 
   $("log-box").innerHTML = "";
   lastLogCount = 0;
@@ -824,6 +830,82 @@ function stopPoll() {
   pollRunning = false;
 }
 
+/** Issue #19: Stage-Fortschritt (Zähler, %, Ø-Zeit, ETA) aktualisieren. */
+function updateStageProgress(data) {
+  const mainBar = $("progress-bar");
+
+  // Sichtbarkeit der Stage-Blöcke
+  const showS0  = data.stage === "stage0" && data.s0_total > 0;
+  const showS1  = data.stage === "stage1" && data.s1_total > 0;
+  const showOcr = data.stage === "stage2" && data.ocr_total > 0;
+  $("s0-progress").classList.toggle("hidden", !showS0);
+  $("s1-progress").classList.toggle("hidden", !showS1);
+  $("ocr-progress").classList.toggle("hidden", !showOcr);
+
+  if (showS0) {
+    const cur = data.s0_current || 0;
+    const tot = data.s0_total;
+    const pct = Math.round((cur / tot) * 100);
+    $("s0-counter").textContent   = `${cur} / ${tot} Dokumente`;
+    $("s0-doc-title").textContent = data.s0_current_title || "";
+    $("progress-bar-s0").style.width = pct + "%";
+    if (data.s0_avg_sec_per_doc != null) {
+      $("s0-avg-time").textContent = `Ø ${formatDuration(data.s0_avg_sec_per_doc)} / Dokument`;
+    }
+    if (data.s0_eta_seconds != null && data.s0_eta_seconds >= 0) {
+      $("s0-eta").textContent = data.s0_eta_seconds < 10
+        ? "Gleich fertig…"
+        : `noch ca. ${formatDuration(data.s0_eta_seconds)}`;
+    }
+    // Hauptbalken: Prozent statt indeterminate
+    mainBar.classList.remove("indeterminate");
+    mainBar.style.width = pct + "%";
+    mainBar.setAttribute("aria-valuenow", String(pct));
+  } else if (showS1) {
+    const cur = data.s1_current || 0;
+    const tot = data.s1_total;
+    const pct = Math.round((cur / tot) * 100);
+    $("s1-counter").textContent   = `${cur} / ${tot} Dokumente`;
+    $("s1-doc-title").textContent = data.s1_current_title || "";
+    $("progress-bar-s1").style.width = pct + "%";
+    if (data.s1_avg_sec_per_doc != null) {
+      $("s1-avg-time").textContent = `Ø ${formatDuration(data.s1_avg_sec_per_doc)} / Dokument`;
+    }
+    if (data.s1_eta_seconds != null && data.s1_eta_seconds >= 0) {
+      $("s1-eta").textContent = data.s1_eta_seconds < 10
+        ? "Gleich fertig…"
+        : `noch ca. ${formatDuration(data.s1_eta_seconds)}`;
+    }
+    mainBar.classList.remove("indeterminate");
+    mainBar.style.width = pct + "%";
+    mainBar.setAttribute("aria-valuenow", String(pct));
+  } else if (showOcr) {
+    // Stage 2: bestehende OCR-Logik (Hauptbalken bleibt / wird wieder indeterminate)
+    if (!mainBar.classList.contains("indeterminate")) {
+      mainBar.className = "progress-bar indeterminate";
+      mainBar.style.width = "";
+      mainBar.setAttribute("aria-valuenow", "0");
+    }
+    $("ocr-counter").textContent   = `${data.ocr_current} / ${data.ocr_total} Dokumente`;
+    $("ocr-doc-title").textContent = data.ocr_current_title || "";
+    const pct = Math.round((data.ocr_current / data.ocr_total) * 100);
+    $("progress-bar-ocr").style.width = pct + "%";
+    if (data.avg_sec_per_doc != null) {
+      $("ocr-avg-time").textContent = `Ø ${formatDuration(data.avg_sec_per_doc)} / Dokument`;
+    }
+    if (data.eta_seconds != null && data.eta_seconds >= 0) {
+      $("ocr-eta").textContent = data.eta_seconds < 10
+        ? "Gleich fertig…"
+        : `noch ca. ${formatDuration(data.eta_seconds)}`;
+    }
+  } else if (!data.done && mainBar && !mainBar.classList.contains("indeterminate")) {
+    // total noch unbekannt → indeterminate beibehalten/herstellen
+    mainBar.className = "progress-bar indeterminate";
+    mainBar.style.width = "";
+    mainBar.setAttribute("aria-valuenow", "0");
+  }
+}
+
 async function pollStatus() {
   pollTimer   = null;
   pollRunning = true;
@@ -865,23 +947,8 @@ async function pollStatus() {
       cancelBtn.classList.add("hidden");
     }
 
-    // OCR-Fortschritt (Stufe 2)
-    if (data.stage === "stage2" && data.ocr_total > 0) {
-      $("ocr-progress").classList.remove("hidden");
-      $("ocr-counter").textContent  = `${data.ocr_current} / ${data.ocr_total} Dokumente`;
-      $("ocr-doc-title").textContent = data.ocr_current_title || "";
-      const pct = Math.round((data.ocr_current / data.ocr_total) * 100);
-      $("progress-bar-ocr").style.width = pct + "%";
-
-      if (data.avg_sec_per_doc !== null && data.avg_sec_per_doc !== undefined) {
-        $("ocr-avg-time").textContent = `Ø ${formatDuration(data.avg_sec_per_doc)} / Dokument`;
-      }
-      if (data.eta_seconds !== null && data.eta_seconds !== undefined && data.eta_seconds >= 0) {
-        $("ocr-eta").textContent = data.eta_seconds < 10
-          ? "Gleich fertig…"
-          : `noch ca. ${formatDuration(data.eta_seconds)}`;
-      }
-    }
+    // Stage-Fortschritt (Issue #19): Stage 0 / 1 / 2
+    updateStageProgress(data);
 
     // P3: Phasen-Label in progress-title aktualisieren
     const titleEl = $("progress-title");
@@ -966,7 +1033,10 @@ function resetUI() {
   $("progress-bar").style.width      = "0%";
   $("progress-bar").style.background = "var(--primary)";
   $("progress-bar").className        = "progress-bar";
+  $("progress-bar").setAttribute("aria-valuenow", "0");
   $("log-box").innerHTML             = "";
+  $("s0-progress").classList.add("hidden");
+  $("s1-progress").classList.add("hidden");
   $("ocr-progress").classList.add("hidden");
   $("btn-cancel").classList.add("hidden");
   lastLogCount = 0;

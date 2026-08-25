@@ -62,6 +62,19 @@ job_status = {
     "cancelled":  False,      # Issue #2
     "excel_path": None,
     "doc_count":  0,
+    # Stage 0 (Excel) – Issue #19
+    "s0_current": 0,
+    "s0_total":   0,
+    "s0_current_title": "",
+    "s0_start_time":    None,
+    "s0_last_doc_time": None,
+    # Stage 1 (PDF-Download) – Issue #19
+    "s1_current": 0,
+    "s1_total":   0,
+    "s1_current_title": "",
+    "s1_start_time":    None,
+    "s1_last_doc_time": None,
+    # Stage 2 (OCR)
     "ocr_current": 0,
     "ocr_total":   0,
     "ocr_current_title": "",
@@ -71,6 +84,19 @@ job_status = {
 }
 job_lock     = threading.Lock()
 cancel_event = threading.Event()   # Issue #2: Abbruch-Steuerung
+
+
+def _calc_eta(start_time, last_doc_time, done, total):
+    """
+    Ø-Zeit und ETA in Sekunden (Issue #19).
+    Rückgabe: (avg_sec_per_doc, eta_seconds) oder (None, None).
+    """
+    if not start_time or done == 0 or total == 0:
+        return None, None
+    elapsed = (last_doc_time or _time.monotonic()) - start_time
+    avg = round(elapsed / done, 1)
+    eta = round(avg * (total - done))
+    return avg, eta
 
 
 def _validate_subfolder(name: str) -> str:
@@ -99,6 +125,10 @@ def _job_status_reset(stage):
         job_status.update({
             "log": [], "done": False, "error": None, "cancelled": False,
             "excel_path": None, "doc_count": 0, "stage": stage,
+            "s0_current": 0, "s0_total": 0, "s0_current_title": "",
+            "s0_start_time": None, "s0_last_doc_time": None,
+            "s1_current": 0, "s1_total": 0, "s1_current_title": "",
+            "s1_start_time": None, "s1_last_doc_time": None,
             "ocr_current": 0, "ocr_total": 0, "ocr_current_title": "",
             "ocr_start_time": None, "ocr_last_doc_time": None,
             "cancellable": is_stage2,  # sofort ab Start von stage2 abbrechbar
@@ -256,18 +286,27 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
 
         with job_lock:
             job_status["doc_count"] = len(docs)
+            job_status["s0_total"] = len(docs)
+            job_status["s0_start_time"] = _time.monotonic()
 
         export_folder = os.path.join(OUTPUT_DIR, year_label)
         _assert_output_path(export_folder)
         os.makedirs(export_folder, exist_ok=True)
         _log(f"Ausgabeordner: {export_folder}")
 
+        def _s0_progress(idx, total, title):
+            with job_lock:
+                job_status["s0_current"] = idx
+                job_status["s0_current_title"] = title or ""
+                job_status["s0_last_doc_time"] = _time.monotonic()
+
         _log("Erstelle Excel-Datei…")
         excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
         excel_path     = os.path.join(export_folder, excel_filename)
         create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH,
                       subfolder=subfolder, hyperlink_mode=HYPERLINK_MODE,
-                      include_text_path=INCLUDE_TEXT_PATH)
+                      include_text_path=INCLUDE_TEXT_PATH,
+                      progress_fn=_s0_progress)
         _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
@@ -347,9 +386,20 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
 
         with job_lock:
             job_status["doc_count"] = len(docs_to_process)
+            job_status["s1_total"] = len(docs_to_process)
+            job_status["s1_start_time"] = _time.monotonic()
+
+        def _s1_progress(idx, total, title):
+            with job_lock:
+                job_status["s1_current"] = idx
+                job_status["s1_current_title"] = title or ""
+                job_status["s1_last_doc_time"] = _time.monotonic()
 
         _log(f"Lade {len(docs_to_process)} PDFs herunter…")
-        pdf_map = download_pdfs(docs_to_process, pdf_folder, PAPERLESS_URL, PAPERLESS_TOKEN, _log)
+        pdf_map = download_pdfs(
+            docs_to_process, pdf_folder, PAPERLESS_URL, PAPERLESS_TOKEN, _log,
+            progress_fn=_s1_progress,
+        )
 
         if append_mode and os.path.exists(excel_path):
             _log("Hänge neue Zeilen ans Excel an…")
@@ -511,25 +561,34 @@ def api_status():
     with job_lock:
         s = dict(job_status)
 
-    avg = None
-    eta = None
-    if (
-        s.get("stage") == "stage2"
-        and s.get("ocr_start_time") is not None
-        and s.get("ocr_current", 0) > 0
-        and s.get("ocr_total", 0) > 0
-    ):
-        elapsed   = (s["ocr_last_doc_time"] or _time.monotonic()) - s["ocr_start_time"]
-        done      = s["ocr_current"]
-        total     = s["ocr_total"]
-        avg       = round(elapsed / done, 1)
-        remaining = total - done
-        eta       = round(avg * remaining)
+    # Issue #19: ETA für alle Stages über gemeinsame Hilfsfunktion
+    s0_avg, s0_eta = _calc_eta(
+        s.get("s0_start_time"), s.get("s0_last_doc_time"),
+        s.get("s0_current", 0), s.get("s0_total", 0),
+    )
+    s1_avg, s1_eta = _calc_eta(
+        s.get("s1_start_time"), s.get("s1_last_doc_time"),
+        s.get("s1_current", 0), s.get("s1_total", 0),
+    )
+    ocr_avg, ocr_eta = _calc_eta(
+        s.get("ocr_start_time"), s.get("ocr_last_doc_time"),
+        s.get("ocr_current", 0), s.get("ocr_total", 0),
+    )
 
-    s["avg_sec_per_doc"] = avg
-    s["eta_seconds"]     = eta
-    s.pop("ocr_start_time",    None)
-    s.pop("ocr_last_doc_time", None)
+    s["s0_avg_sec_per_doc"] = s0_avg
+    s["s0_eta_seconds"]     = s0_eta
+    s["s1_avg_sec_per_doc"] = s1_avg
+    s["s1_eta_seconds"]     = s1_eta
+    # Stage-2-Felder unverändert für bestehendes Frontend
+    s["avg_sec_per_doc"] = ocr_avg
+    s["eta_seconds"]     = ocr_eta
+
+    for key in (
+        "s0_start_time", "s0_last_doc_time",
+        "s1_start_time", "s1_last_doc_time",
+        "ocr_start_time", "ocr_last_doc_time",
+    ):
+        s.pop(key, None)
     return jsonify(s)
 
 
