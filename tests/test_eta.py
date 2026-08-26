@@ -44,6 +44,32 @@ class TestCalcEta:
         assert eta == 0
 
 
+class TestInvoiceSheetFallback:
+    def test_renamed_sheet_still_readable(self, tmp_path):
+        from excel_export import create_excel, read_invoices_for_matching, _get_invoice_sheet
+        import openpyxl
+        docs = [{
+            "id": 1, "title": "A", "created": "2025-03-10",
+            "archive_serial_number": 1, "correspondent_name": "ACME",
+        }]
+        path = str(tmp_path / "edited.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        wb["Rechnungsaufstellung"].cell(row=5, column=8).value = 12.5
+        # Sheet umbenennen wie bei manueller Bearbeitung
+        wb["Rechnungsaufstellung"].title = "Tabelle1"
+        wb.save(path)
+
+        wb2 = openpyxl.load_workbook(path)
+        assert "Rechnungsaufstellung" not in wb2.sheetnames
+        ws = _get_invoice_sheet(wb2)
+        assert ws.title == "Tabelle1"
+
+        inv = read_invoices_for_matching(path)
+        assert len(inv) == 1
+        assert inv[0]["betrag"] == 12.5
+
+
 class TestCreateExcelProgress:
     def test_progress_fn_called_per_doc(self, tmp_path):
         docs = [

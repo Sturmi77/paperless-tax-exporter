@@ -63,6 +63,39 @@ COLOR_MATCH_MISS    = "FCE4D6"  # Orange – nicht gefunden
 DATE_FORMAT   = "DD.MM.YYYY"
 NUMBER_FORMAT = '#,##0.00 "€"'
 
+SHEET_INVOICE = "Rechnungsaufstellung"
+
+
+def _get_invoice_sheet(wb):
+    """
+    Liefert das Rechnungs-Worksheet.
+    1) Exakter Name „Rechnungsaufstellung“
+    2) Sheet mit Header-Zeile 4 (Beleg-Nr. / Re-Dat)
+    3) Erstes Worksheet
+    """
+    if SHEET_INVOICE in wb.sheetnames:
+        return wb[SHEET_INVOICE]
+
+    def _norm(v):
+        if v is None:
+            return ""
+        return str(v).replace("\n", " ").strip().lower()
+
+    for name in wb.sheetnames:
+        ws = wb[name]
+        headers = [_norm(ws.cell(row=4, column=c).value) for c in range(1, 6)]
+        joined = " ".join(headers)
+        if "beleg" in joined or "re-dat" in joined or "re dat" in joined:
+            return ws
+
+    if wb.sheetnames:
+        return wb[wb.sheetnames[0]]
+
+    raise ValueError(
+        "Excel enthält kein Worksheet. "
+        f"Vorhanden: {wb.sheetnames!r}"
+    )
+
 
 def _header_cell(ws, row, col, value, align="center"):
     cell = ws.cell(row=row, column=col, value=value)
@@ -332,7 +365,7 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
 
     wb = openpyxl.load_workbook(excel_path)
-    ws = wb["Rechnungsaufstellung"]
+    ws = _get_invoice_sheet(wb)
 
     YELLOW_FILL = PatternFill("solid", fgColor=COLOR_OCR_BG)
     EMPTY_FILL  = PatternFill("solid", fgColor=COLOR_EMPTY_BG)
@@ -411,7 +444,7 @@ def get_existing_doc_ids(excel_path):
     if not os.path.exists(excel_path):
         return set()
     wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
-    ws = wb["Rechnungsaufstellung"]
+    ws = _get_invoice_sheet(wb)
     ids = set()
     for row in ws.iter_rows(min_row=5, max_col=1, values_only=True):
         val = row[0]
@@ -441,7 +474,7 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label,
         return 0
 
     wb = openpyxl.load_workbook(excel_path)
-    ws = wb["Rechnungsaufstellung"]
+    ws = _get_invoice_sheet(wb)
 
     # Letzte belegte Zeile in Spalte A finden
     last_row = 4  # Mindestens Header-Zeile
@@ -627,7 +660,7 @@ def read_invoices_for_matching(excel_path) -> list:
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
 
     wb = openpyxl.load_workbook(excel_path, data_only=True)
-    ws = wb["Rechnungsaufstellung"]
+    ws = _get_invoice_sheet(wb)
     invoices = []
     for row in range(5, ws.max_row + 1):
         beleg = ws.cell(row=row, column=1).value
@@ -670,7 +703,7 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
 
     wb = openpyxl.load_workbook(excel_path)
-    ws = wb["Rechnungsaufstellung"]
+    ws = _get_invoice_sheet(wb)
     col_text, col_status = _ensure_bank_match_columns(ws)
     updated = 0
 
