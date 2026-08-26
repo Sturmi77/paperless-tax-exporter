@@ -323,3 +323,31 @@ class TestCellFormulaHyperlinks:
         # Kein statischer NAS-Pfad in der Formel
         assert "SynologyDS923" not in val
         wb.close()
+
+class TestCreateExcelNoOverwrite:
+    def test_refuses_existing_file(self, tmp_path):
+        docs = [{
+            "id": 1, "archive_serial_number": "0001", "created": "2024-01-10",
+            "correspondent_name": "A", "title": "R1",
+            "document_type": 1, "document_type_name": "Rechnung",
+        }]
+        out = str(tmp_path / "keep.xlsx")
+        create_excel(docs, {}, out, "2024")
+        with open(out, "rb") as f:
+            before = f.read()
+        import pytest
+        with pytest.raises(FileExistsError):
+            create_excel(docs, {}, out, "2024")
+        with open(out, "rb") as f:
+            assert f.read() == before
+
+    def test_overwrite_flag_allows_replace(self, tmp_path):
+        docs = [{
+            "id": 1, "archive_serial_number": "0001", "created": "2024-01-10",
+            "correspondent_name": "A", "title": "R1",
+            "document_type": 1, "document_type_name": "Rechnung",
+        }]
+        out = str(tmp_path / "force.xlsx")
+        create_excel(docs, {}, out, "2024")
+        create_excel(docs, {}, out, "2024", overwrite=True)
+        assert os.path.exists(out)

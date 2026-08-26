@@ -259,12 +259,24 @@ def enrich_documents_with_correspondents(documents, correspondents):
 
 # ── Stufe 0: Nur Excel (Issue #1) ─────────────────────────────────────
 def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="created",
-               document_type_ids=None, subfolder: str = ""):
-    """Erstellt nur die Excel-Datei – kein PDF-Download, kein OCR."""
+               document_type_ids=None, subfolder: str = "", append_mode: bool = False):
+    """Erstellt nur die Excel-Datei – kein PDF-Download, kein OCR.
+    Bestehende Excel-Dateien werden nie überschrieben – nur Anhängen."""
     global job_status
     try:
         _job_status_reset("stage0")
-        _log(f"Nur Excel – gestartet: {date_from} bis {date_to}")
+        export_folder = os.path.join(OUTPUT_DIR, year_label)
+        _assert_output_path(export_folder)
+        os.makedirs(export_folder, exist_ok=True)
+        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
+        excel_path     = os.path.join(export_folder, excel_filename)
+
+        # Harte Regel: existierende Excel → immer Append (manuelle Arbeit schützen)
+        if os.path.exists(excel_path):
+            append_mode = True
+
+        mode_label = "Nachtrag (nur Excel)" if append_mode else "Nur Excel"
+        _log(f"{mode_label} – gestartet: {date_from} bis {date_to}")
         if tag_names:
             _log(f"Tags: {', '.join(tag_names)}")
         _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
@@ -288,15 +300,27 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
                     "error": "Keine Dokumente im gewählten Zeitraum/Tag gefunden."})
             return
 
-        with job_lock:
-            job_status["doc_count"] = len(docs)
-            job_status["s0_total"] = len(docs)
-            job_status["s0_start_time"] = _time.monotonic()
+        if append_mode and os.path.exists(excel_path):
+            existing_ids = get_existing_doc_ids(excel_path)
+            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden – Datei bleibt erhalten.")
+            new_docs = [
+                d for d in docs
+                if str(d.get("archive_serial_number") or d.get("id")) not in existing_ids
+            ]
+            _log(f"{len(new_docs)} neue Belege werden angehängt.")
+            if not new_docs:
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                        "error": "Keine neuen Dokumente – bestehende Excel unverändert belassen."})
+                return
+            docs_to_process = new_docs
+        else:
+            docs_to_process = docs
 
-        export_folder = os.path.join(OUTPUT_DIR, year_label)
-        _assert_output_path(export_folder)
-        os.makedirs(export_folder, exist_ok=True)
-        _log(f"Ausgabeordner: {export_folder}")
+        with job_lock:
+            job_status["doc_count"] = len(docs_to_process)
+            job_status["s0_total"] = len(docs_to_process)
+            job_status["s0_start_time"] = _time.monotonic()
 
         def _s0_progress(idx, total, title):
             with job_lock:
@@ -304,19 +328,30 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
                 job_status["s0_current_title"] = title or ""
                 job_status["s0_last_doc_time"] = _time.monotonic()
 
-        _log("Erstelle Excel-Datei…")
-        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
-        excel_path     = os.path.join(export_folder, excel_filename)
-        create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH,
-                      subfolder=subfolder, hyperlink_mode=HYPERLINK_MODE,
-                      include_text_path=INCLUDE_TEXT_PATH,
-                      progress_fn=_s0_progress)
-        _log(f"Excel gespeichert: {excel_filename}")
+        _log(f"Ausgabeordner: {export_folder}")
+        if append_mode and os.path.exists(excel_path):
+            _log("Hänge neue Zeilen ans bestehende Excel an (kein Überschreiben)…")
+            added = append_to_excel(
+                docs_to_process, {}, excel_path, year_label,
+                unc_base=WINDOWS_UNC_PATH, subfolder=subfolder,
+                hyperlink_mode=HYPERLINK_MODE,
+                include_text_path=INCLUDE_TEXT_PATH,
+            )
+            _log(f"Excel ergänzt: {added} neue Zeile(n). Manuelle Einträge unverändert.")
+        else:
+            _log("Erstelle Excel-Datei…")
+            create_excel(docs_to_process, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH,
+                          subfolder=subfolder, hyperlink_mode=HYPERLINK_MODE,
+                          include_text_path=INCLUDE_TEXT_PATH,
+                          progress_fn=_s0_progress)
+            _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
             job_status.update({
                 "done": True, "running": False, "excel_path": excel_path,
-                "log": job_status["log"] + [f"✓ Excel abgeschlossen. {len(docs)} Belege exportiert."],
+                "log": job_status["log"] + [
+                    f"✓ {mode_label} abgeschlossen. {len(docs_to_process)} Belege."
+                ],
             })
 
     except Exception as e:
@@ -334,6 +369,13 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
     global job_status
     try:
         _job_status_reset("stage1")
+        export_folder  = os.path.join(OUTPUT_DIR, year_label)
+        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
+        excel_path     = os.path.join(export_folder, excel_filename)
+        # Harte Regel: existierende Excel → immer Append
+        if os.path.exists(excel_path):
+            append_mode = True
+
         mode_label = "Nachtrag" if append_mode else "Stufe 1"
         _log(f"{mode_label} gestartet: {date_from} bis {date_to}")
         if tag_names:
@@ -357,14 +399,11 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
                     "error": "Keine Dokumente im gewählten Zeitraum/Tag gefunden."})
             return
 
-        export_folder  = os.path.join(OUTPUT_DIR, year_label)
         # Subfolder: <year>/<subfolder>/Belege/ wenn gesetzt, sonst <year>/Belege/
         if subfolder:
             pdf_folder = os.path.join(export_folder, subfolder, "Belege")
         else:
             pdf_folder = os.path.join(export_folder, "Belege")
-        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
-        excel_path     = os.path.join(export_folder, excel_filename)
         _assert_output_path(export_folder)
         _assert_output_path(pdf_folder)
         os.makedirs(pdf_folder, exist_ok=True)
@@ -373,7 +412,7 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         # Append-Modus: nur wirklich neue Dokumente verarbeiten
         if append_mode and os.path.exists(excel_path):
             existing_ids = get_existing_doc_ids(excel_path)
-            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden.")
+            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden – Datei bleibt erhalten.")
             new_docs = [
                 d for d in docs
                 if str(d.get("archive_serial_number") or d.get("id")) not in existing_ids
@@ -406,12 +445,12 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         )
 
         if append_mode and os.path.exists(excel_path):
-            _log("Hänge neue Zeilen ans Excel an…")
+            _log("Hänge neue Zeilen ans Excel an (kein Überschreiben)…")
             added = append_to_excel(docs_to_process, pdf_map, excel_path, year_label,
                                     unc_base=WINDOWS_UNC_PATH, subfolder=subfolder,
                                     hyperlink_mode=HYPERLINK_MODE,
                                     include_text_path=INCLUDE_TEXT_PATH)
-            _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt.")
+            _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt. Manuelle Einträge unverändert.")
         else:
             _log("Erstelle Excel-Datei…")
             create_excel(docs_to_process, pdf_map, excel_path, year_label,
@@ -664,7 +703,8 @@ def api_start():
         thread = threading.Thread(
             target=run_stage0,
             args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
-            kwargs={"document_type_ids": document_type_ids, "subfolder": subfolder},
+            kwargs={"document_type_ids": document_type_ids, "subfolder": subfolder,
+                    "append_mode": append_mode},
             daemon=True,
         )
     elif mode == "stage2":

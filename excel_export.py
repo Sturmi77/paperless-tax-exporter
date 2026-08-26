@@ -176,7 +176,7 @@ def _build_cell_formula(subfolder_path: str) -> str:
 def create_excel(documents, pdf_map, output_path, year_label,
                  unc_base=None, ocr_results=None, subfolder: str = "",
                  hyperlink_mode: str = "cell", include_text_path: bool = False,
-                 progress_fn=None):
+                 progress_fn=None, overwrite: bool = False):
     """
     Erstellt die Excel-Datei im Steuerberater-Format (Stufe 1).
 
@@ -190,7 +190,15 @@ def create_excel(documents, pdf_map, output_path, year_label,
     hyperlink_mode:    "cell" = CELL()-Formel (portabel); "unc" = absoluter UNC-Pfad (Issue #8)
     include_text_path: True = Spalte K mit kopierbarem UNC-Pfad (Issue #8)
     progress_fn:       optional callable(idx, total, title) – Fortschritt pro Zeile (Issue #19)
+    overwrite:         False (Default): bestehende Datei nie überschreiben (manuelle Arbeit schützen)
     """
+    if os.path.exists(output_path) and not overwrite:
+        raise FileExistsError(
+            f"Excel existiert bereits und wird nicht überschrieben "
+            f"(manuelle Einträge schützen): {output_path}. "
+            f"Bitte „Nur neue hinzufügen“ (Append) verwenden."
+        )
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Rechnungsaufstellung"

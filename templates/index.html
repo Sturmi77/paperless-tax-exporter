@@ -447,7 +447,7 @@
       <h3 class="modal-title" id="overwrite-modal-title">Dateien bereits vorhanden</h3>
       <p class="modal-text">Für diesen Zeitraum existieren bereits exportierte Dateien:</p>
       <ul class="modal-details" id="overwrite-details"></ul>
-      <p class="modal-text modal-text-warn">Beim Überschreiben werden diese Dateien ersetzt – manuelle Einträge (Zahlungsdatum, Kennzahl) gehen verloren.</p>
+      <p class="modal-text modal-text-warn">Bestehende Excel-Dateien werden nicht überschrieben – manuelle Einträge bleiben erhalten.</p>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-overwrite-cancel">Abbrechen</button>
         <button class="btn btn-primary" id="btn-overwrite-append">
@@ -456,7 +456,7 @@
           </svg>
           Nur neue hinzufügen
         </button>
-        <button class="btn btn-danger btn-modal-danger" id="btn-overwrite-confirm">Alles überschreiben</button>
+        <button class="btn btn-danger btn-modal-danger hidden" id="btn-overwrite-confirm">Fortfahren</button>
       </div>
     </div>
   </div>

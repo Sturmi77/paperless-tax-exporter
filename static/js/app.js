@@ -671,48 +671,82 @@ function formatDuration(seconds) {
   return rm > 0 ? `${h} Std. ${rm} Min.` : `${h} Std.`;
 }
 
-// --- Issue #4: Überschreib-Prüfung ------------------------------------
+// --- Issue #4: Überschreib-Prüfung – Excel wird nie zerstört ----------
 async function checkExistsAndConfirm(yearLabel, mode) {
-  // Nur bei Stufe 1 oder both relevant (nicht stage0, nicht stage2)
-  if (mode === "stage2" || mode === "stage0") return true;
+  // Stufe 2 ändert nur Zellen, kein Neu-Anlegen
+  if (mode === "stage2") return true;
 
   let data;
   try {
     const res = await fetch(`/api/check-exists?year=${encodeURIComponent(yearLabel)}`);
     data = await res.json();
   } catch {
-    return true; // Bei Fehler einfach fortfahren
+    return true; // Bei Fehler einfach fortfahren (Server schützt Excel zusätzlich)
   }
 
-  if (!data.excel_exists && !data.pdfs_exist) return true; // nichts vorhanden
+  if (!data.excel_exists && !data.pdfs_exist) return true;
 
-  // Modal befüllen und anzeigen
   let details = "";
-  if (data.excel_exists) details += `<li>Excel-Datei: <strong>Rechnungsaufstellung_${yearLabel}.xlsx</strong></li>`;
-  if (data.pdfs_exist)   details += `<li>PDF-Ordner: <strong>Belege/</strong> (${data.pdf_count} Dateien)</li>`;
+  if (data.excel_exists) {
+    details += `<li>Excel-Datei: <strong>Rechnungsaufstellung_${yearLabel}.xlsx</strong> `
+      + `<em>(wird erhalten – nur Anhängen möglich)</em></li>`;
+  }
+  if (data.pdfs_exist) {
+    details += `<li>PDF-Ordner: <strong>Belege/</strong> (${data.pdf_count} Dateien)</li>`;
+  }
 
   $("overwrite-details").innerHTML = details;
+  const warn = document.querySelector("#overwrite-modal .modal-text-warn");
+  const btnOverwrite = $("btn-overwrite-confirm");
+  const btnAppend = $("btn-overwrite-append");
+  const title = $("overwrite-modal-title");
+
+  if (data.excel_exists) {
+    // Excel mit manuellem Aufwand: kein Überschreiben anbieten
+    if (title) title.textContent = "Excel bereits vorhanden";
+    if (warn) {
+      warn.textContent = "Die bestehende Excel-Datei wird nicht überschrieben "
+        + "(Zahlungsdaten, Matching, manuelle Einträge bleiben erhalten). "
+        + "Neue Belege können angehängt werden.";
+    }
+    if (btnOverwrite) btnOverwrite.classList.add("hidden");
+    if (btnAppend) btnAppend.classList.remove("hidden");
+  } else {
+    // Nur PDFs – Excel neu anlegbar
+    if (title) title.textContent = "Dateien bereits vorhanden";
+    if (warn) {
+      warn.textContent = "PDF-Ordner existiert bereits. Fortfahren lädt ggf. erneut herunter "
+        + "und legt die Excel neu an.";
+    }
+    if (btnOverwrite) {
+      btnOverwrite.classList.remove("hidden");
+      btnOverwrite.textContent = "Fortfahren";
+    }
+    if (btnAppend) btnAppend.classList.add("hidden");
+  }
+
   const modal = $("overwrite-modal");
   modal.classList.remove("hidden");
-
-  // Fokus auf ersten Button setzen (A1: Focus Management)
-  setTimeout(() => $("btn-overwrite-cancel").focus(), 50);
+  setTimeout(() => {
+    const focusBtn = data.excel_exists ? $("btn-overwrite-append") : $("btn-overwrite-cancel");
+    if (focusBtn) focusBtn.focus();
+  }, 50);
 
   return new Promise(resolve => {
     function closeModal(result) {
       modal.classList.add("hidden");
       document.removeEventListener("keydown", escHandler);
       modal.removeEventListener("click", backdropHandler);
+      // Excel existiert → „Fortfahren“/true wird zu Append erzwungen
+      if (data.excel_exists && result === true) result = "append";
       resolve(result);
     }
 
-    // M2: Escape-Key schließt Modal
     function escHandler(e) {
       if (e.key === "Escape") closeModal(false);
     }
     document.addEventListener("keydown", escHandler);
 
-    // M3: Klick auf Backdrop schließt Modal
     function backdropHandler(e) {
       if (e.target === modal) closeModal(false);
     }
@@ -756,7 +790,7 @@ async function startExport(mode) {
   const appendMode = confirmed === "append";
 
   const titles = {
-    stage0:  "Nur Excel wird erstellt…",
+    stage0:  appendMode ? "Neue Belege ans Excel anhängen…" : "Nur Excel wird erstellt…",
     stage1:  appendMode ? "Neue Belege werden hinzugefügt…" : "PDFs & Excel wird erstellt…",
     stage2:  "OCR-Analyse läuft…",
     both:    appendMode ? "Neue Belege + OCR-Analyse läuft…" : "Vollständiger Export läuft…",
