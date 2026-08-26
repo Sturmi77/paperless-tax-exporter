@@ -296,3 +296,29 @@ class TestCellFormulaHyperlinks:
         # Kein statischer NAS-Pfad in der Formel
         assert "SynologyDS923" not in val
         wb.close()
+
+    def test_append_preserves_wide_table_after_match_cols(self, tmp_path):
+        """Append darf Match-Spalten nicht wieder auf 10 Spalten schrumpfen."""
+        from openpyxl.utils import range_boundaries
+        from excel_export import update_excel_with_bank_matches, _ensure_bank_match_columns
+        import openpyxl
+
+        out = str(tmp_path / "append_wide.xlsx")
+        create_excel(self.INITIAL_DOCS, self.PDF_MAP, out, "2024", unc_base=self.UNC_BASE)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Rechnungsaufstellung"]
+        _ensure_bank_match_columns(ws)
+        wb.save(out)
+        t1 = [t for t in openpyxl.load_workbook(out)["Rechnungsaufstellung"].tables.values()
+              if t.displayName == "Tabelle1"][0]
+        _c1, _r1, cols_before, rows_before = range_boundaries(t1.ref)
+        assert cols_before > 10
+
+        added = append_to_excel(self.NEW_DOCS, self.PDF_MAP, out, "2024", unc_base=self.UNC_BASE)
+        assert added == 1
+        t1b = [t for t in openpyxl.load_workbook(out)["Rechnungsaufstellung"].tables.values()
+               if t.displayName == "Tabelle1"][0]
+        _a, _b, cols_after, rows_after = range_boundaries(t1b.ref)
+        assert cols_after >= cols_before
+        assert rows_after > rows_before
+        assert len(t1b.tableColumns) == (cols_after - _a + 1)

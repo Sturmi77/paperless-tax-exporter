@@ -353,6 +353,20 @@ def create_excel(documents, pdf_map, output_path, year_label,
     return output_path
 
 
+def _cell_fill_is(cell, hex6: str) -> bool:
+    """Vergleicht Zellenfarbe robust (mit/ohne Alpha-Prefix)."""
+    try:
+        fill = cell.fill
+        if not fill or not fill.fgColor:
+            return False
+        rgb = fill.fgColor.rgb
+        if rgb is None:
+            return False
+        return str(rgb).upper().endswith(str(hex6).upper())
+    except Exception:
+        return False
+
+
 def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
                           subfolder: str = ""):
     """
@@ -397,8 +411,7 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
         # Spalte E (Absender) – nur überschreiben wenn leer oder gelb
         cell_e = ws.cell(row=row_num, column=5)
         e_is_empty = cell_e.value is None or cell_e.value == ""
-        e_is_ocr   = (cell_e.fill and cell_e.fill.fgColor and
-                      cell_e.fill.fgColor.rgb == COLOR_OCR_BG)
+        e_is_ocr   = _cell_fill_is(cell_e, COLOR_OCR_BG)
         if absender and (e_is_empty or e_is_ocr):
             cell_e.value      = absender
             cell_e.fill       = YELLOW_FILL
@@ -411,8 +424,7 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
         # Spalte H (Rechnungssumme) – nur überschreiben wenn leer oder gelb
         cell_h = ws.cell(row=row_num, column=8)
         h_is_empty = cell_h.value is None or cell_h.value == ""
-        h_is_ocr   = (cell_h.fill and cell_h.fill.fgColor and
-                      cell_h.fill.fgColor.rgb == COLOR_OCR_BG)
+        h_is_ocr   = _cell_fill_is(cell_h, COLOR_OCR_BG)
         if betrag is not None and (h_is_empty or h_is_ocr):
             cell_h.value         = betrag
             cell_h.fill          = YELLOW_FILL
@@ -423,10 +435,15 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
             cell_h.comment       = _make_comment("OCR-Vorschlag – bitte prüfen!")
             updated += 1
 
-        # Spalte J (Hyperlink) – nur wenn noch kein Hyperlink vorhanden
+        # Spalte J (Hyperlink) – nur Plain-Filename → HYPERLINK; CELL()-Formeln unangetastet
         cell_j = ws.cell(row=row_num, column=10)
-        filename = str(cell_j.value or "")
-        if filename and unc_base and not str(filename).startswith("=HYPERLINK"):
+        raw_j = cell_j.value
+        if raw_j is None or raw_j == "":
+            continue
+        filename = str(raw_j)
+        if filename.startswith("="):
+            continue  # bestehende Formel (CELL/HYPERLINK) nicht umschreiben
+        if unc_base:
             unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
             cell_j.value      = f'=HYPERLINK("{unc_path}","{filename}")'
             cell_j.font       = Font(size=10, color=COLOR_HYPERLINK, underline="single")
@@ -568,23 +585,51 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label,
         else:
             _data_cell(ws, row, 10, filename, align="left")
 
-    # SUMME-Formel auf neue letzte Zeile ausdehnen
+    # SUMME-Formel auf neue letzte Zeile ausdehnen – nur eigenes SUM, keine manuellen H1-Formeln
     new_last_row = insert_start + len(sorted_new) - 1
-    ws["H1"] = f"=SUM(H5:H{new_last_row})"
-    ws["H1"].number_format = NUMBER_FORMAT
-    ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
-    ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
-    ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
-    ws["H1"].border        = BORDER
+    h1 = ws["H1"]
+    h1_val = h1.value
+    if h1_val is None or (
+        isinstance(h1_val, str) and h1_val.strip().upper().startswith("=SUM")
+    ):
+        ws["H1"] = f"=SUM(H5:H{new_last_row})"
+        ws["H1"].number_format = NUMBER_FORMAT
+        ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+        ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
+        ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
+        ws["H1"].border        = BORDER
 
-    # Tabellen-Referenz ausweiten
-    for tbl in ws.tables.values():
-        if tbl.displayName == "Tabelle1":
-            tbl.ref = f"A4:{get_column_letter(len(COLUMNS))}{new_last_row}"
-            break
+    # Tabellen-Zeilen erweitern (Spaltenbreite behalten, nie schrumpfen) + Columns syncen
+    _expand_invoice_table_rows(ws, new_last_row, include_text_path=include_text_path)
 
     wb.save(excel_path)
     return len(sorted_new)
+
+
+def _expand_invoice_table_rows(ws, new_last_row: int, *, include_text_path: bool = False) -> None:
+    """
+    Erweitert die Rechnungs-Tabelle nach unten. Spaltenbreite bleibt mindestens
+    der bisherige Stand (kein Schrumpfen auf len(COLUMNS) – schont Match-Spalten).
+    """
+    from openpyxl.utils import range_boundaries
+
+    tbl = _find_invoice_table(ws)
+    if tbl is None:
+        return
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+        needed = 11 if include_text_path else len(COLUMNS)
+        last_col = max(max_col, needed)
+        if new_last_row < max_row and last_col == max_col:
+            return
+        end_row = max(max_row, new_last_row)
+        tbl.ref = (
+            f"{get_column_letter(min_col)}{min_row}:"
+            f"{get_column_letter(last_col)}{end_row}"
+        )
+        _sync_table_columns_from_header(ws, tbl)
+    except Exception:
+        return
 
 
 # ── Issue #25: Kontoauszug-Matching ───────────────────────────────────
@@ -638,14 +683,24 @@ def _ensure_bank_match_columns(ws) -> tuple:
 
     added = False
 
+    def _claim_header_col(preferred: int) -> int:
+        """Nächste freie Header-Zelle ab preferred (keine Übernahme fremder Inhalte)."""
+        col = preferred
+        for _ in range(50):
+            val = ws.cell(row=4, column=col).value
+            if val is None or str(val).strip() == "":
+                return col
+            col += 1
+        return preferred
+
     if col_text is None:
-        col_text = next_col
+        col_text = _claim_header_col(next_col)
         _header_cell(ws, 4, col_text, COLUMN_BOOKING_TEXT[0], COLUMN_BOOKING_TEXT[2])
         ws.column_dimensions[get_column_letter(col_text)].width = COLUMN_BOOKING_TEXT[1]
-        next_col += 1
+        next_col = col_text + 1
         added = True
     if col_status is None:
-        col_status = next_col
+        col_status = _claim_header_col(next_col)
         _header_cell(ws, 4, col_status, COLUMN_MATCH_STATUS[0], COLUMN_MATCH_STATUS[2])
         ws.column_dimensions[get_column_letter(col_status)].width = COLUMN_MATCH_STATUS[1]
         added = True
