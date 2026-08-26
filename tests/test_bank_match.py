@@ -402,3 +402,52 @@ class TestExcelBankUpdate:
         assert got == existing
         # kein Match-Datum 2025-03-15 geschrieben
         assert got != date(2025, 3, 15)
+    def test_table_columns_synced_no_second_table_expand(self, tmp_path):
+        """
+        Ref-Erweiterung muss tableColumns syncen; zweite Tabelle nicht anfassen
+        (sonst Excel-Reparatur: table2.xml entfernt).
+        """
+        from openpyxl.worksheet.table import Table, TableStyleInfo
+        from openpyxl.utils import range_boundaries
+
+        docs = [{
+            "id": 1, "title": "Software", "created": "2025-03-10",
+            "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
+        }]
+        path = str(tmp_path / "two_tables.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 42.50
+        # Zweite Tabelle unterhalb, ohne Header-Zeile 4 (kein Einfluss auf next_col)
+        ws.cell(row=10, column=20).value = "Notiz"
+        ws.cell(row=11, column=20).value = "x"
+        t2 = Table(displayName="Hilfstabelle", ref="T10:T11")
+        t2.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        ws.add_table(t2)
+        t1_before = [t for t in ws.tables.values() if t.displayName == "Tabelle1"][0]
+        t1_ref_before = t1_before.ref
+        t2_ref_before = "T10:T11"
+        wb.save(path)
+
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        bank = [b for b in bank if b["selected"] and "Duplikat" not in (b.get("text") or "")]
+        invoices = read_invoices_for_matching(path)
+        result = match_invoices_to_bank(invoices, bank)
+        update_excel_with_bank_matches(path, result)
+
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        assert "Tabelle1" in [t.displayName for t in ws2.tables.values()]
+        assert "Hilfstabelle" in [t.displayName for t in ws2.tables.values()]
+        t1 = [t for t in ws2.tables.values() if t.displayName == "Tabelle1"][0]
+        t2b = [t for t in ws2.tables.values() if t.displayName == "Hilfstabelle"][0]
+        assert t2b.ref == t2_ref_before
+        _c1, r1, c2, r2 = range_boundaries(t1.ref)
+        _a, _b, c2_before, _d = range_boundaries(t1_ref_before)
+        assert c2 > c2_before
+        assert r1 == 4 and r2 >= 5
+        assert len(t1.tableColumns) == (c2 - _c1 + 1)
+        names = [c.name for c in t1.tableColumns]
+        assert len(names) == len(set(n.lower() for n in names))
+        assert any("Match-Status" in n or "match" in n.lower() for n in names)

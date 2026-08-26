@@ -604,9 +604,12 @@ def _header_map(ws) -> dict:
 def _ensure_bank_match_columns(ws) -> tuple:
     """
     Stellt sicher, dass Spalten Buchungstext und Match-Status existieren.
-    Erweitert Excel-Tabellen nur um Spalten (Zeilenbereich unverändert) – Issue #32.
+    Neue Spalten werden direkt rechts an die Rechnungs-Tabelle gehängt
+    (nicht hinter fremde Spalten/Tabellen). Issue #32 / Excel-Repair.
     Rückgabe: (col_booking_text, col_match_status)
     """
+    from openpyxl.utils import range_boundaries
+
     headers = _header_map(ws)
     col_text = None
     col_status = None
@@ -616,11 +619,23 @@ def _ensure_bank_match_columns(ws) -> tuple:
         if "match-status" in name or name == "match status":
             col_status = col
 
-    last_header = 0
-    for col in range(1, ws.max_column + 1):
-        if ws.cell(row=4, column=col).value is not None:
-            last_header = col
-    next_col = last_header + 1
+    tbl = _find_invoice_table(ws)
+    if tbl is not None:
+        try:
+            _min_c, _min_r, max_col, _max_r = range_boundaries(tbl.ref)
+            next_col = max_col + 1
+        except Exception:
+            next_col = None
+    else:
+        next_col = None
+
+    if next_col is None:
+        last_header = 0
+        for col in range(1, ws.max_column + 1):
+            if ws.cell(row=4, column=col).value is not None:
+                last_header = col
+        next_col = last_header + 1
+
     added = False
 
     if col_text is None:
@@ -635,7 +650,7 @@ def _ensure_bank_match_columns(ws) -> tuple:
         ws.column_dimensions[get_column_letter(col_status)].width = COLUMN_MATCH_STATUS[1]
         added = True
 
-    if added:
+    if added or tbl is not None:
         _expand_table_columns_only(ws, max(col_text, col_status))
 
     return col_text, col_status
@@ -678,25 +693,119 @@ def _status_cell_writable(cell) -> bool:
     return str(cell.value).strip() in _MATCH_STATUS_VALUES
 
 
-def _expand_table_columns_only(ws, last_col: int) -> None:
+def _find_invoice_table(ws):
     """
-    Erweitert Tabellen-Refs nur nach rechts (Spalten).
-    Zeilenbereich der bestehenden Tabelle bleibt unverändert – schont Formeln (#32).
+    Liefert die Rechnungs-Tabelle (oder None).
+    Preferenz: displayName Tabelle1, sonst Tabelle die Header-Zeile 4 abdeckt.
     """
     from openpyxl.utils import range_boundaries
 
-    for tbl in list(ws.tables.values()):
+    tables = list(ws.tables.values())
+    if not tables:
+        return None
+    for tbl in tables:
+        if (tbl.displayName or "").strip().lower() in ("tabelle1", "table1"):
+            return tbl
+    for tbl in tables:
         try:
-            min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
-            if last_col <= max_col:
-                continue
-            tbl.ref = (
-                f"{get_column_letter(min_col)}{min_row}:"
-                f"{get_column_letter(last_col)}{max_row}"
-            )
+            _c1, r1, _c2, r2 = range_boundaries(tbl.ref)
+            if r1 <= 4 <= r2:
+                return tbl
         except Exception:
-            # Tabelle nicht anfassen, wenn etwas schiefgeht
             continue
+    return tables[0]
+
+
+def _sync_table_columns_from_header(ws, tbl) -> None:
+    """
+    tableColumns + autoFilter an tbl.ref und Header-Zeile anpassen.
+    Verhindert Excel-Reparatur („Teil /xl/tables/tableN.xml entfernt“).
+    """
+    from openpyxl.utils import range_boundaries
+    from openpyxl.worksheet.table import TableColumn
+
+    min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+    used_names = set()
+    columns = []
+    for idx, col in enumerate(range(min_col, max_col + 1), start=1):
+        raw = ws.cell(row=min_row, column=col).value
+        name = str(raw).replace("\n", " ").strip() if raw not in (None, "") else ""
+        if not name:
+            name = f"Spalte{idx}"
+            ws.cell(row=min_row, column=col).value = name
+        # Excel verlangt eindeutige Spaltennamen in Tabellen
+        base = name
+        n = 2
+        while name.lower() in used_names:
+            name = f"{base} ({n})"
+            n += 1
+        used_names.add(name.lower())
+        columns.append(TableColumn(id=idx, name=name))
+
+    tbl.tableColumns = columns
+    if tbl.autoFilter is not None:
+        tbl.autoFilter.ref = tbl.ref
+    else:
+        try:
+            from openpyxl.worksheet.filters import AutoFilter
+            tbl.autoFilter = AutoFilter(ref=tbl.ref)
+        except Exception:
+            pass
+
+
+def _table_ranges_overlap(ref_a: str, ref_b: str) -> bool:
+    from openpyxl.utils import range_boundaries
+    a1, r1, a2, r2 = range_boundaries(ref_a)
+    b1, s1, b2, s2 = range_boundaries(ref_b)
+    return not (a2 < b1 or b2 < a1 or r2 < s1 or s2 < r1)
+
+
+def _expand_table_columns_only(ws, last_col: int) -> None:
+    """
+    Erweitert NUR die Rechnungs-Tabelle nach rechts (Spalten).
+    Zeilenbereich unverändert. tableColumns werden synchronisiert (#32 / Repair-Fix).
+    Andere Tabellen werden nicht angefasst (Überlappung → Excel entfernt table2).
+    """
+    from openpyxl.utils import range_boundaries
+
+    tbl = _find_invoice_table(ws)
+    if tbl is None:
+        return
+
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+    except Exception:
+        return
+
+    if last_col <= max_col:
+        # Ref passt schon – trotzdem Columns syncen falls Header neu sind
+        try:
+            _sync_table_columns_from_header(ws, tbl)
+        except Exception:
+            pass
+        return
+
+    new_ref = (
+        f"{get_column_letter(min_col)}{min_row}:"
+        f"{get_column_letter(last_col)}{max_row}"
+    )
+
+    # Nicht erweitern, wenn eine andere Tabelle dadurch überlappen würde
+    for other in ws.tables.values():
+        if other is tbl or other.name == tbl.name:
+            continue
+        try:
+            if _table_ranges_overlap(new_ref, other.ref):
+                return
+        except Exception:
+            continue
+
+    try:
+        tbl.ref = new_ref
+        _sync_table_columns_from_header(ws, tbl)
+    except Exception:
+        # Tabelle nicht anfassen, wenn etwas schiefgeht
+        return
 
 
 def _parse_excel_date(val):
