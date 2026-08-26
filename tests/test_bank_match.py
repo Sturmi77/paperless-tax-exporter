@@ -326,7 +326,6 @@ class TestExcelBankUpdate:
         assert cell_c.value == pay_before
         assert cell_c.fill.fill_type is None
         assert cell_c.comment is None
-        # Match-Status-Spalte vorhanden aber leer / hidden
         headers = {
             (ws2.cell(row=4, column=c).value or "").strip(): c
             for c in range(1, ws2.max_column + 1)
@@ -335,3 +334,71 @@ class TestExcelBankUpdate:
         assert col_s
         assert ws2.cell(row=5, column=col_s).value in (None, "")
         assert ws2.column_dimensions[openpyxl.utils.get_column_letter(col_s)].hidden is True
+
+    def test_only_empty_cells_get_values(self, tmp_path):
+        """Befuellte C / Buchungstext / manueller Status bleiben unangetastet."""
+        from datetime import date
+        from excel_export import _ensure_bank_match_columns
+        docs = [{
+            "id": 1, "title": "Software", "created": "2025-03-10",
+            "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
+        }]
+        path = str(tmp_path / "preserve.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 42.50
+        # Match-Spalten anlegen und manuell befuellen, C leer lassen fuer Read
+        col_text, col_status = _ensure_bank_match_columns(ws)
+        ws.cell(row=5, column=col_text).value = "MANUELLER TEXT"
+        ws.cell(row=5, column=col_status).value = "bitte pruefen"
+        wb.save(path)
+
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        bank = [b for b in bank if b["selected"] and "Duplikat" not in (b.get("text") or "")]
+        invoices = read_invoices_for_matching(path)
+        result = match_invoices_to_bank(invoices, bank)
+        assert result["stats"]["gefunden"] == 1
+        update_excel_with_bank_matches(path, result)
+
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        assert ws2.cell(row=5, column=3).value is not None  # C war leer → Datum ok
+        assert ws2.cell(row=5, column=col_text).value == "MANUELLER TEXT"
+        assert ws2.cell(row=5, column=col_status).value == "bitte pruefen"
+
+    def test_filled_c_not_overwritten_even_if_in_result(self, tmp_path):
+        from datetime import date
+        docs = [{
+            "id": 1, "title": "Software", "created": "2025-03-10",
+            "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
+        }]
+        path = str(tmp_path / "filled_c.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 42.50
+        existing = date(2025, 1, 1)
+        ws.cell(row=5, column=3).value = existing
+        wb.save(path)
+
+        # Ergebnis kuenstlich (Read wuerde Zeile ueberspringen)
+        fake = {
+            "matches": [{
+                "invoice_row": 5,
+                "date": date(2025, 3, 15),
+                "text": "soll nicht schreiben",
+                "status": STATUS_FOUND,
+            }],
+            "ambiguous": [],
+            "unmatched": [],
+            "no_amount": [],
+        }
+        update_excel_with_bank_matches(path, fake)
+        wb2 = openpyxl.load_workbook(path)
+        got = wb2["Rechnungsaufstellung"].cell(row=5, column=3).value
+        if hasattr(got, "date"):
+            got = got.date()
+        assert got == existing
+        # kein Match-Datum 2025-03-15 geschrieben
+        assert got != date(2025, 3, 15)
