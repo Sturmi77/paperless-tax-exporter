@@ -20,9 +20,9 @@ from excel_export import (  # noqa: E402
     create_excel,
     read_invoices_for_matching,
     update_excel_with_bank_matches,
-    write_filtered_bank_xlsx,
 )
 import openpyxl  # noqa: E402
+from openpyxl.utils import range_boundaries  # noqa: E402
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "at_giro_sample.csv")
 
@@ -119,8 +119,9 @@ class TestExcelBankUpdate:
         assert inv[0]["beleg_nr"] == 1
         assert inv[0]["betrag"] == 42.50
 
-    def test_update_and_filtered(self, tmp_path):
+    def test_update_preserves_formulas_and_table_rows(self, tmp_path):
         from datetime import date
+        from matching_csv import STATUS_FOUND
         docs = [{
             "id": 1, "title": "Software", "created": "2025-03-10",
             "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
@@ -128,7 +129,13 @@ class TestExcelBankUpdate:
         path = str(tmp_path / "Rechnungsaufstellung_2025.xlsx")
         create_excel(docs, {}, path, "2025")
         wb = openpyxl.load_workbook(path)
-        wb["Rechnungsaufstellung"].cell(row=5, column=8).value = 42.50
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 42.50
+        # Manuelle Formel (darf nicht ueberschrieben werden)
+        ws.cell(row=5, column=9).value = "=H5*0.5"
+        sum_before = ws["H1"].value
+        table_ref_before = list(ws.tables.values())[0].ref
+        min_c, min_r, max_c, max_r = range_boundaries(table_ref_before)
         wb.save(path)
 
         bank = parse_bank_csv(FIXTURE, debits_only=True)
@@ -138,14 +145,43 @@ class TestExcelBankUpdate:
         assert result["stats"]["gefunden"] == 1
         n = update_excel_with_bank_matches(path, result)
         assert n >= 1
-        wb2 = openpyxl.load_workbook(path)
-        ws = wb2["Rechnungsaufstellung"]
-        assert ws.cell(row=5, column=3).value is not None
-        # Match-Status Spalte existiert
-        headers = [ws.cell(row=4, column=c).value for c in range(1, ws.max_column + 1)]
-        assert any(h and "Match-Status" in str(h) for h in headers)
-        assert any(h and "Buchungstext" in str(h) for h in headers)
 
-        out = str(tmp_path / "Kontoauszug_gefiltert_2025.xlsx")
-        write_filtered_bank_xlsx(bank, result, out)
-        assert os.path.exists(out)
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        assert ws2["H1"].value == sum_before
+        assert ws2.cell(row=5, column=9).value == "=H5*0.5"
+        assert ws2.cell(row=5, column=3).value is not None
+        headers = [ws2.cell(row=4, column=c).value for c in range(1, ws2.max_column + 1)]
+        assert any(h and "Match-Status" in str(h) for h in headers)
+        # Tabellen-Zeilenbereich unveraendert
+        ref_after = list(ws2.tables.values())[0].ref
+        _c1, r1, _c2, r2 = range_boundaries(ref_after)
+        assert r1 == min_r and r2 == max_r
+
+    def test_formula_in_c_not_overwritten(self, tmp_path):
+        docs = [{
+            "id": 1, "title": "Software", "created": "2025-03-10",
+            "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
+        }]
+        path = str(tmp_path / "with_formula_c.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 42.50
+        # C leer fuer Matching-Lesen: data_only liefert None wenn nie berechnet.
+        # Fuer den Write-Guard setzen wir eine Formel NACH dem read-Pfad simuliert:
+        # Matching liest data_only – leeres C. Dann Write mit Formel in C vorher.
+        wb.save(path)
+
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        bank = [b for b in bank if b["selected"] and "Duplikat" not in (b.get("text") or "")]
+        invoices = read_invoices_for_matching(path)
+        result = match_invoices_to_bank(invoices, bank)
+
+        wb2 = openpyxl.load_workbook(path)
+        wb2["Rechnungsaufstellung"].cell(row=5, column=3).value = "=B5"
+        wb2.save(path)
+
+        update_excel_with_bank_matches(path, result)
+        wb3 = openpyxl.load_workbook(path)
+        assert wb3["Rechnungsaufstellung"].cell(row=5, column=3).value == "=B5"

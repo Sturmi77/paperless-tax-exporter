@@ -1155,15 +1155,7 @@ function renderBankMatchResult(data) {
   if (data.excel_rel_path) {
     html += "<p>Excel: <code>" + data.excel_rel_path + "</code></p>";
   }
-  if (data.filtered_bank_file) {
-    let href = "/api/bank-csv/download-filtered?";
-    if (data.excel_rel_path) {
-      href += "excel_rel_path=" + encodeURIComponent(data.excel_rel_path);
-    } else if (data.year_label) {
-      href += "year=" + encodeURIComponent(data.year_label);
-    }
-    html += '<p><a class="btn btn-secondary" href="' + href + '">Gefilterten Kontoauszug laden</a></p>';
-  }
+  html += "<p class=\"field-hint\">In Excel nach Spalte <strong>Match-Status</strong> filtern (gefunden / nicht gefunden / mehrdeutig).</p>";
   if ((data.matches || []).length) {
     html += "<details open><summary>Gefunden (" + data.matches.length + ")</summary><ul>";
     data.matches.slice(0, 20).forEach(function (m) {
