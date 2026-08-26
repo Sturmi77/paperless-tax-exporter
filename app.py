@@ -11,7 +11,8 @@ from flask import Flask, render_template, request, jsonify, send_file
 
 from excel_export import create_excel, update_excel_with_ocr, \
                          append_to_excel, get_existing_doc_ids, \
-                         read_invoices_for_matching, update_excel_with_bank_matches
+                         read_invoices_for_matching, update_excel_with_bank_matches, \
+                         prepare_stb_export
 from pdf_export import download_pdfs
 from llm_extract import extract_from_ocr, check_ollama_available
 from bank_csv import parse_bank_csv, csv_preview
@@ -1007,6 +1008,7 @@ def _serialize_match_result(result: dict) -> dict:
         "matches": [_ser_match(m) for m in result.get("matches", [])],
         "ambiguous": [_ser_inv(a) for a in result.get("ambiguous", [])],
         "unmatched": [_ser_inv(u) for u in result.get("unmatched", [])],
+        "no_amount": [_ser_inv(n) for n in result.get("no_amount", [])],
         "stats": result.get("stats", {}),
     }
 
@@ -1101,6 +1103,37 @@ def api_bank_csv_match():
         payload["bank_rows_total"] = len(bank_rows)
         payload["bank_rows_selected"] = sum(1 for b in bank_rows if b.get("selected"))
         return jsonify(payload)
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except (ValueError, FileNotFoundError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/bank-csv/stb-export", methods=["POST"])
+def api_bank_csv_stb_export():
+    """
+    STB-Export-Modus: Farben/Kommentare entfernen, Match-Status leeren + ausblenden,
+    gefüllte Zahlungsdaten behalten (Issue #34).
+    Body: excel_rel_path | excel_file | year_label
+    """
+    if request.content_type and "multipart/form-data" in (request.content_type or ""):
+        data = request.form.to_dict()
+        f_excel = request.files.get("excel_file")
+    else:
+        data = request.get_json(force=True, silent=True) or {}
+        f_excel = None
+    try:
+        excel_path, excel_rel, year_label = _resolve_excel_path(data, f_excel)
+        stats = prepare_stb_export(excel_path)
+        return jsonify({
+            "ok": True,
+            "excel_path": excel_path,
+            "excel_rel_path": excel_rel,
+            "year_label": year_label,
+            **stats,
+        })
     except PermissionError as e:
         return jsonify({"error": str(e)}), 403
     except (ValueError, FileNotFoundError) as e:

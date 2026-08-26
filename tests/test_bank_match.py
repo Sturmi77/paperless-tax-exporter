@@ -1,5 +1,5 @@
 """
-Tests fuer Kontoauszug-Matching (Issue #25).
+Tests fuer Kontoauszug-Matching (Issue #25 / #34).
 """
 import os
 import sys
@@ -15,11 +15,23 @@ os.environ.setdefault("PAPERLESS_TOKEN", "test-token")
 os.environ.setdefault("WINDOWS_UNC_PATH", "")
 
 from bank_csv import parse_de_amount, parse_bank_csv, csv_preview, parse_iso_date  # noqa: E402
-from matching_csv import match_invoices_to_bank, amounts_match, STATUS_FOUND  # noqa: E402
+from matching_csv import (  # noqa: E402
+    match_invoices_to_bank,
+    amounts_match,
+    STATUS_FOUND,
+    STATUS_AMBIGUOUS,
+    STATUS_NOT_FOUND,
+    STATUS_NO_AMOUNT,
+)
 from excel_export import (  # noqa: E402
     create_excel,
     read_invoices_for_matching,
     update_excel_with_bank_matches,
+    prepare_stb_export,
+    COLOR_MATCH_OK,
+    COLOR_MATCH_AMBIG,
+    COLOR_MATCH_MISS,
+    COLOR_MATCH_NO_AMT,
 )
 import openpyxl  # noqa: E402
 from openpyxl.utils import range_boundaries  # noqa: E402
@@ -92,8 +104,64 @@ class TestMatching:
         }]
         bank = parse_bank_csv(FIXTURE, debits_only=True)
         result = match_invoices_to_bank(invoices, bank, min_score=0.1)
-        # zwei -42,50 ACME-Zeilen → mehrdeutig oder einer gefunden wenn Score klar
-        assert result["stats"]["gefunden"] + result["stats"]["mehrdeutig"] >= 1
+        # zwei -42,50 ACME-Zeilen → volle Haerte: immer mehrdeutig
+        assert result["stats"]["mehrdeutig"] == 1
+        assert result["stats"]["gefunden"] == 0
+        assert result["ambiguous"][0]["status"] == STATUS_AMBIGUOUS
+
+    def test_no_blind_amount_only_match(self):
+        """Ohne Textscore kein Treffer – auch bei eindeutigem Betrag."""
+        from datetime import date
+        invoices = [{
+            "row": 5,
+            "beleg_nr": 1,
+            "re_dat": date(2025, 3, 10),
+            "absender": "ZZZQQQ Fremdfirma 999",
+            "beschreibung": "Komplett anderer Betreff xyzzy",
+            "betrag": 42.50,
+        }]
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        # nur eine Betragszeile – frueher waere das ein Blind-Match gewesen
+        bank = [b for b in bank if b["selected"] and "Duplikat" not in (b.get("text") or "")]
+        result = match_invoices_to_bank(invoices, bank, min_score=0.25)
+        assert result["stats"]["gefunden"] == 0
+        assert result["stats"]["nicht_gefunden"] == 1
+        assert result["unmatched"][0]["status"] == STATUS_NOT_FOUND
+
+    def test_no_amount_status(self):
+        from datetime import date
+        invoices = [{
+            "row": 5,
+            "beleg_nr": 1,
+            "re_dat": date(2025, 3, 10),
+            "absender": "ACME",
+            "beschreibung": "x",
+            "betrag": None,
+        }]
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        result = match_invoices_to_bank(invoices, bank)
+        assert result["stats"]["kein_betrag"] == 1
+        assert result["no_amount"][0]["status"] == STATUS_NO_AMOUNT
+
+    def test_one_to_one_bank_lock(self):
+        from datetime import date
+        invoices = [
+            {
+                "row": 5, "beleg_nr": 1, "re_dat": date(2025, 3, 10),
+                "absender": "ACME GmbH", "beschreibung": "Rechnung Software", "betrag": 42.50,
+            },
+            {
+                "row": 6, "beleg_nr": 2, "re_dat": date(2025, 3, 10),
+                "absender": "ACME GmbH", "beschreibung": "Rechnung Software", "betrag": 42.50,
+            },
+        ]
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        bank = [b for b in bank if b["selected"] and "Duplikat" not in (b.get("text") or "")]
+        # nur eine 42,50-Zeile uebrig → erste Rechnung gefunden, zweite nicht/mehrdeutig
+        result = match_invoices_to_bank(invoices, bank)
+        assert result["stats"]["gefunden"] == 1
+        assert result["stats"]["bank_used"] == 1
+        assert result["stats"]["gefunden"] + result["stats"]["nicht_gefunden"] + result["stats"]["mehrdeutig"] == 2
 
 
 class TestExcelBankUpdate:
@@ -109,7 +177,6 @@ class TestExcelBankUpdate:
         create_excel(docs, {}, path, "2025")
         wb = openpyxl.load_workbook(path)
         ws = wb["Rechnungsaufstellung"]
-        # Betrag setzen, C leer lassen bei Zeile 5; Zeile 6 bekommt Zahlungsdatum
         ws.cell(row=5, column=8).value = 42.50
         ws.cell(row=6, column=8).value = 10.00
         ws.cell(row=6, column=3).value = date(2025, 3, 20)
@@ -119,9 +186,8 @@ class TestExcelBankUpdate:
         assert inv[0]["beleg_nr"] == 1
         assert inv[0]["betrag"] == 42.50
 
-    def test_update_preserves_formulas_and_table_rows(self, tmp_path):
+    def test_update_colors_c_and_preserves_formulas(self, tmp_path):
         from datetime import date
-        from matching_csv import STATUS_FOUND
         docs = [{
             "id": 1, "title": "Software", "created": "2025-03-10",
             "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
@@ -131,7 +197,6 @@ class TestExcelBankUpdate:
         wb = openpyxl.load_workbook(path)
         ws = wb["Rechnungsaufstellung"]
         ws.cell(row=5, column=8).value = 42.50
-        # Manuelle Formel (darf nicht ueberschrieben werden)
         ws.cell(row=5, column=9).value = "=H5*0.5"
         sum_before = ws["H1"].value
         table_ref_before = list(ws.tables.values())[0].ref
@@ -151,12 +216,60 @@ class TestExcelBankUpdate:
         assert ws2["H1"].value == sum_before
         assert ws2.cell(row=5, column=9).value == "=H5*0.5"
         assert ws2.cell(row=5, column=3).value is not None
+        assert ws2.cell(row=5, column=3).fill.fgColor.rgb[-6:].upper() == COLOR_MATCH_OK
         headers = [ws2.cell(row=4, column=c).value for c in range(1, ws2.max_column + 1)]
         assert any(h and "Match-Status" in str(h) for h in headers)
-        # Tabellen-Zeilenbereich unveraendert
         ref_after = list(ws2.tables.values())[0].ref
         _c1, r1, _c2, r2 = range_boundaries(ref_after)
         assert r1 == min_r and r2 == max_r
+
+    def test_ambiguous_and_miss_color_c(self, tmp_path):
+        from datetime import date
+        docs = [
+            {"id": 1, "title": "A", "created": "2025-03-10", "archive_serial_number": 1,
+             "correspondent_name": "ACME"},
+            {"id": 2, "title": "B", "created": "2025-03-10", "archive_serial_number": 2,
+             "correspondent_name": "Nobody"},
+        ]
+        path = str(tmp_path / "colors.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 42.50
+        ws.cell(row=6, column=8).value = 999.99
+        wb.save(path)
+
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        invoices = read_invoices_for_matching(path)
+        result = match_invoices_to_bank(invoices, bank, min_score=0.1)
+        update_excel_with_bank_matches(path, result)
+
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        # Zeile 5 mehrdeutig (2x 42,50) → C leer + gelb
+        assert ws2.cell(row=5, column=3).value in (None, "")
+        assert ws2.cell(row=5, column=3).fill.fgColor.rgb[-6:].upper() == COLOR_MATCH_AMBIG
+        # Zeile 6 nicht gefunden → C leer + rot
+        assert ws2.cell(row=6, column=3).value in (None, "")
+        assert ws2.cell(row=6, column=3).fill.fgColor.rgb[-6:].upper() == COLOR_MATCH_MISS
+
+    def test_no_amount_gray_c(self, tmp_path):
+        docs = [{
+            "id": 1, "title": "NoAmt", "created": "2025-03-10",
+            "archive_serial_number": 1, "correspondent_name": "X",
+        }]
+        path = str(tmp_path / "noamt.xlsx")
+        create_excel(docs, {}, path, "2025")
+        # H leer lassen
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        invoices = read_invoices_for_matching(path)
+        result = match_invoices_to_bank(invoices, bank)
+        assert result["stats"]["kein_betrag"] == 1
+        update_excel_with_bank_matches(path, result)
+        wb = openpyxl.load_workbook(path)
+        cell = wb["Rechnungsaufstellung"].cell(row=5, column=3)
+        assert cell.value in (None, "")
+        assert cell.fill.fgColor.rgb[-6:].upper() == COLOR_MATCH_NO_AMT
 
     def test_formula_in_c_not_overwritten(self, tmp_path):
         docs = [{
@@ -168,9 +281,6 @@ class TestExcelBankUpdate:
         wb = openpyxl.load_workbook(path)
         ws = wb["Rechnungsaufstellung"]
         ws.cell(row=5, column=8).value = 42.50
-        # C leer fuer Matching-Lesen: data_only liefert None wenn nie berechnet.
-        # Fuer den Write-Guard setzen wir eine Formel NACH dem read-Pfad simuliert:
-        # Matching liest data_only – leeres C. Dann Write mit Formel in C vorher.
         wb.save(path)
 
         bank = parse_bank_csv(FIXTURE, debits_only=True)
@@ -185,3 +295,43 @@ class TestExcelBankUpdate:
         update_excel_with_bank_matches(path, result)
         wb3 = openpyxl.load_workbook(path)
         assert wb3["Rechnungsaufstellung"].cell(row=5, column=3).value == "=B5"
+
+    def test_stb_export_clears_styles_keeps_date(self, tmp_path):
+        from datetime import date
+        docs = [{
+            "id": 1, "title": "Software", "created": "2025-03-10",
+            "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
+        }]
+        path = str(tmp_path / "stb.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        wb["Rechnungsaufstellung"].cell(row=5, column=8).value = 42.50
+        wb.save(path)
+
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        bank = [b for b in bank if b["selected"] and "Duplikat" not in (b.get("text") or "")]
+        invoices = read_invoices_for_matching(path)
+        result = match_invoices_to_bank(invoices, bank)
+        update_excel_with_bank_matches(path, result)
+
+        pay_before = openpyxl.load_workbook(path)["Rechnungsaufstellung"].cell(row=5, column=3).value
+        assert pay_before is not None
+
+        stats = prepare_stb_export(path)
+        assert stats["status_column_hidden"] is True
+
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        cell_c = ws2.cell(row=5, column=3)
+        assert cell_c.value == pay_before
+        assert cell_c.fill.fill_type is None
+        assert cell_c.comment is None
+        # Match-Status-Spalte vorhanden aber leer / hidden
+        headers = {
+            (ws2.cell(row=4, column=c).value or "").strip(): c
+            for c in range(1, ws2.max_column + 1)
+        }
+        col_s = headers.get("Match-Status")
+        assert col_s
+        assert ws2.cell(row=5, column=col_s).value in (None, "")
+        assert ws2.column_dimensions[openpyxl.utils.get_column_letter(col_s)].hidden is True

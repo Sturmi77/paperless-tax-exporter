@@ -1047,24 +1047,45 @@ function resetUI() {
   enableButtons();
 }
 
-// --- Issue #25 / #28 / #29: Kontoauszug-Matching ----------------------
+// --- Issue #25 / #28 / #29 / #34: Kontoauszug-Matching ----------------
 let bankUploadKey = null;
 let bankCsvRelPath = null;
 let bankExcelRelPath = null;
+let bankDryRunOk = false;
+let bankLastPreviewStats = null;
+
+function setBankApplyEnabled(enabled) {
+  const ba = $("btn-bank-apply");
+  if (!ba) return;
+  ba.disabled = !enabled;
+  ba.title = enabled
+    ? "Vorschau geprueft – Zuordnung ins Excel schreiben"
+    : "Zuerst Vorschau Matching ausfuehren";
+}
+
+function invalidateBankDryRun() {
+  bankDryRunOk = false;
+  bankLastPreviewStats = null;
+  setBankApplyEnabled(false);
+}
 
 function initBankMatchUI() {
   const bp = $("btn-bank-preview");
   const bd = $("btn-bank-dryrun");
   const ba = $("btn-bank-apply");
+  const stb = $("btn-bank-stb-export");
   if (bp) bp.addEventListener("click", () => bankCsvPreview());
   if (bd) bd.addEventListener("click", () => bankCsvMatch(true));
   if (ba) ba.addEventListener("click", () => bankCsvMatch(false));
+  if (stb) stb.addEventListener("click", () => bankStbExport());
+  setBankApplyEnabled(false);
 
   const excelSel = $("bank-excel-select");
   const csvSel = $("bank-csv-select");
   if (excelSel) {
     excelSel.addEventListener("change", function () {
       bankExcelRelPath = excelSel.value || null;
+      invalidateBankDryRun();
     });
   }
   if (csvSel) {
@@ -1073,29 +1094,32 @@ function initBankMatchUI() {
       bankUploadKey = null;
       const fn = $("bank-csv-filename");
       if (fn && bankCsvRelPath) fn.textContent = bankCsvRelPath;
+      invalidateBankDryRun();
     });
   }
+
+  const debits = $("bank-debits-only");
+  const relevant = $("bank-only-relevant");
+  if (debits) debits.addEventListener("change", invalidateBankDryRun);
+  if (relevant) relevant.addEventListener("change", invalidateBankDryRun);
 
   const browse = $("btn-bank-csv-browse");
   const fileInput = $("bank-csv-file");
   if (browse && fileInput) {
-    browse.addEventListener("click", function () { fileInput.click(); });
+    browse.addEventListener("click", () => fileInput.click());
     fileInput.addEventListener("change", function () {
-      const f = fileInput.files && fileInput.files[0];
       const fn = $("bank-csv-filename");
-      if (fn) fn.textContent = f ? f.name : "Keine Datei";
-      if (f) {
-        bankCsvRelPath = null;
-        if (csvSel) csvSel.value = "";
-      }
+      if (fn) fn.textContent = (fileInput.files && fileInput.files[0])
+        ? fileInput.files[0].name : "Keine Datei";
+      bankUploadKey = null;
+      invalidateBankDryRun();
     });
   }
 
-  const rx = $("btn-bank-excel-refresh");
+  const re = $("btn-bank-excel-refresh");
   const rc = $("btn-bank-csv-refresh");
-  if (rx) rx.addEventListener("click", () => loadBankFileList("xlsx"));
+  if (re) re.addEventListener("click", () => loadBankFileList("xlsx"));
   if (rc) rc.addEventListener("click", () => loadBankFileList("csv"));
-
   loadBankFileList("xlsx");
   loadBankFileList("csv");
 }
@@ -1146,16 +1170,18 @@ function renderBankMatchResult(data) {
   if (!box) return;
   const s = data.stats || {};
   let html = '<div class="bank-stats">';
-  html += "<strong>Vorschau:</strong> " + (data.dry_run ? "Dry-Run" : "Geschrieben") + " · ";
-  html += "Rechnungen: " + (s.invoices || 0) + " · ";
-  html += "gefunden: " + (s.gefunden || 0) + " · ";
-  html += "mehrdeutig: " + (s.mehrdeutig || 0) + " · ";
-  html += "nicht gefunden: " + (s.nicht_gefunden || 0);
+  html += "<strong>" + (data.dry_run ? "Vorschau (noch nicht geschrieben)" : "Geschrieben") + "</strong> · ";
+  html += "offen: " + (s.invoices || 0) + " · ";
+  html += '<span class="bank-pill bank-pill-ok">gefunden ' + (s.gefunden || 0) + "</span> · ";
+  html += '<span class="bank-pill bank-pill-ambig">mehrdeutig ' + (s.mehrdeutig || 0) + "</span> · ";
+  html += '<span class="bank-pill bank-pill-miss">nicht gefunden ' + (s.nicht_gefunden || 0) + "</span> · ";
+  html += '<span class="bank-pill bank-pill-amt">kein Betrag ' + (s.kein_betrag || 0) + "</span>";
   html += "</div>";
   if (data.excel_rel_path) {
     html += "<p>Excel: <code>" + data.excel_rel_path + "</code></p>";
   }
-  html += "<p class=\"field-hint\">In Excel nach Spalte <strong>Match-Status</strong> filtern (gefunden / nicht gefunden / mehrdeutig).</p>";
+  html += "<p class=\"field-hint\">Spalte C: gruen=Datum gesetzt, gelb=mehrdeutig, rot=nicht gefunden, grau=kein Betrag. "
+    + "Vor STB-Abgabe gelb/rot klaeren oder „STB-Export vorbereiten“.</p>";
   if ((data.matches || []).length) {
     html += "<details open><summary>Gefunden (" + data.matches.length + ")</summary><ul>";
     data.matches.slice(0, 20).forEach(function (m) {
@@ -1164,7 +1190,7 @@ function renderBankMatchResult(data) {
     html += "</ul></details>";
   }
   if ((data.ambiguous || []).length) {
-    html += "<details><summary>Mehrdeutig (" + data.ambiguous.length + ")</summary><ul>";
+    html += "<details open><summary>Mehrdeutig (" + data.ambiguous.length + ")</summary><ul>";
     data.ambiguous.slice(0, 15).forEach(function (a) {
       html += "<li>Beleg " + (a.beleg_nr || "?") + " · " + (a.candidates || []).length + " Kandidaten</li>";
     });
@@ -1173,6 +1199,13 @@ function renderBankMatchResult(data) {
   if ((data.unmatched || []).length) {
     html += "<details><summary>Nicht gefunden (" + data.unmatched.length + ")</summary><ul>";
     data.unmatched.slice(0, 20).forEach(function (u) {
+      html += "<li>Beleg " + (u.beleg_nr || "?") + " · " + (u.beschreibung || u.absender || "") + "</li>";
+    });
+    html += "</ul></details>";
+  }
+  if ((data.no_amount || []).length) {
+    html += "<details><summary>Kein Betrag (" + data.no_amount.length + ")</summary><ul>";
+    data.no_amount.slice(0, 20).forEach(function (u) {
       html += "<li>Beleg " + (u.beleg_nr || "?") + " · " + (u.beschreibung || u.absender || "") + "</li>";
     });
     html += "</ul></details>";
@@ -1245,7 +1278,18 @@ async function bankCsvMatch(dryRun) {
     return;
   }
   if (!dryRun) {
-    const ok = window.confirm("Zuordnungen ins Excel schreiben und gefilterten Kontoauszug erzeugen?");
+    if (!bankDryRunOk || !bankLastPreviewStats) {
+      bankMatchShowMsg("Bitte zuerst „Vorschau Matching“ ausfuehren und die Zaehler pruefen.", true);
+      return;
+    }
+    const s = bankLastPreviewStats;
+    const ok = window.confirm(
+      "Zuordnung ins Excel schreiben?\n\n" +
+      "gefunden: " + (s.gefunden || 0) + " (C = Datum, gruen)\n" +
+      "mehrdeutig: " + (s.mehrdeutig || 0) + " (C leer, gelb)\n" +
+      "nicht gefunden: " + (s.nicht_gefunden || 0) + " (C leer, rot)\n" +
+      "kein Betrag: " + (s.kein_betrag || 0) + " (C leer, grau)"
+    );
     if (!ok) return;
   }
   try {
@@ -1259,10 +1303,54 @@ async function bankCsvMatch(dryRun) {
     if (data.csv_rel_path) bankCsvRelPath = data.csv_rel_path;
     if (data.excel_rel_path) bankExcelRelPath = data.excel_rel_path;
     renderBankMatchResult(data);
+    if (dryRun) {
+      bankDryRunOk = true;
+      bankLastPreviewStats = data.stats || {};
+      setBankApplyEnabled(true);
+      bankMatchShowMsg(
+        "Vorschau fertig – bitte Zaehler pruefen. Danach „Zuordnung schreiben“ freigeschaltet.",
+        false
+      );
+    } else {
+      invalidateBankDryRun();
+      bankMatchShowMsg(
+        "Geschrieben. Excel-Updates: " + (data.excel_updated || 0) +
+        ". Vor STB-Abgabe gelb/rot klaeren oder STB-Export vorbereiten.",
+        false
+      );
+    }
+  } catch (err) {
+    bankMatchShowMsg("Verbindungsfehler: " + err.message, true);
+  }
+}
+
+async function bankStbExport() {
+  bankMatchShowMsg("");
+  const excelRel = ($("bank-excel-select") && $("bank-excel-select").value) || bankExcelRelPath || "";
+  if (!excelRel) {
+    bankMatchShowMsg("Bitte Rechnungs-Excel aus der Liste waehlen.", true);
+    return;
+  }
+  const ok = window.confirm(
+    "STB-Export vorbereiten?\n\n" +
+    "Entfernt Match-Farben und Kommentare an Spalte C,\n" +
+    "leert Match-Status und blendet die Spalte aus.\n" +
+    "Gefuellte Zahlungsdaten bleiben erhalten."
+  );
+  if (!ok) return;
+  try {
+    const fd = new FormData();
+    fd.append("excel_rel_path", excelRel);
+    const res = await fetch("/api/bank-csv/stb-export", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      bankMatchShowMsg(data.error || "STB-Export fehlgeschlagen", true);
+      return;
+    }
     bankMatchShowMsg(
-      dryRun
-        ? "Dry-Run abgeschlossen – noch nichts geschrieben."
-        : ("Geschrieben. Excel-Updates: " + (data.excel_updated || 0)),
+      "STB-Export fertig · C-Styles: " + (data.cleared_payment_styles || 0) +
+      " · Status geleert: " + (data.cleared_status || 0) +
+      (data.status_column_hidden ? " · Match-Status ausgeblendet" : ""),
       false
     );
   } catch (err) {

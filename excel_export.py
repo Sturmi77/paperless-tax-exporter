@@ -57,8 +57,9 @@ COLUMN_BOOKING_TEXT = ("Buchungstext", 42.0, "left")
 COLUMN_MATCH_STATUS = ("Match-Status", 16.0, "center")
 
 COLOR_MATCH_OK      = "C6EFCE"  # Grün – gefunden
-COLOR_MATCH_AMBIG   = "FFFFC7"  # Gelb – mehrdeutig (wie OCR)
-COLOR_MATCH_MISS    = "FCE4D6"  # Orange – nicht gefunden
+COLOR_MATCH_AMBIG   = "FFFFC7"  # Gelb – mehrdeutig
+COLOR_MATCH_MISS    = "FFC7CE"  # Rot – nicht gefunden (Issue #34)
+COLOR_MATCH_NO_AMT  = "D9D9D9"  # Grau – kein Betrag
 
 DATE_FORMAT   = "DD.MM.YYYY"
 NUMBER_FORMAT = '#,##0.00 "€"'
@@ -727,15 +728,37 @@ def read_invoices_for_matching(excel_path) -> list:
     return invoices
 
 
+def _clear_cell_fill_comment(cell) -> None:
+    cell.fill = PatternFill(fill_type=None)
+    cell.comment = None
+
+
+def _style_payment_cell(cell, fill_color, comment=None):
+    """Farbe/Kommentar auf Spalte C (führender Indikator, Issue #34)."""
+    if _is_formula_cell(cell):
+        return False
+    cell.fill = PatternFill("solid", fgColor=fill_color)
+    cell.font = Font(size=10)
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    cell.border = BORDER
+    if comment:
+        cell.comment = _make_comment(comment)
+    return True
+
+
 def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     """
-    Schreibt Matching-Ergebnis NUR in die Rechnungs-Excel (Issue #32).
-    - gefunden: C=Datum (wenn leer/keine Formel), Buchungstext, Status grün
-    - mehrdeutig: Status gelb + Kommentar
-    - nicht gefunden: Status orange
+    Schreibt Matching-Ergebnis NUR in die Rechnungs-Excel (Issue #32 / #34).
+    Führend: Spalte C (Zahlungsdatum) – Wert + Farbe.
+    - gefunden: C=Datum + grün; Buchungstext; Match-Status
+    - mehrdeutig: C leer + gelb + Kommentar mit Kandidaten
+    - nicht gefunden: C leer + rot
+    - kein Betrag: C leer + grau
     Keine Zusatzdatei. Formeln und Tabellen-Zeilenbereiche bleiben erhalten.
     """
-    from matching_csv import STATUS_FOUND, STATUS_AMBIGUOUS, STATUS_NOT_FOUND
+    from matching_csv import (
+        STATUS_FOUND, STATUS_AMBIGUOUS, STATUS_NOT_FOUND, STATUS_NO_AMOUNT,
+    )
 
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
@@ -764,7 +787,6 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
         cell = ws.cell(row=row, column=col_text)
         if _is_formula_cell(cell):
             return
-        # Nur schreiben wenn leer oder vorheriger Match-Text (kein manueller Freitext-Schutz nötig in v1)
         cell.value = text or ""
         cell.fill = PatternFill("solid", fgColor=fill_color)
         cell.font = Font(size=10)
@@ -778,17 +800,20 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
         if _cell_is_writable(cell_c):
             cell_c.value = m["date"]
             cell_c.number_format = DATE_FORMAT
-            cell_c.fill = PatternFill("solid", fgColor=COLOR_MATCH_OK)
-            cell_c.font = Font(size=10)
-            cell_c.alignment = Alignment(horizontal="center", vertical="center")
-            cell_c.border = BORDER
-            cell_c.comment = _make_comment("Aus Kontoauszug zugeordnet – bitte prüfen!")
+            _style_payment_cell(
+                cell_c, COLOR_MATCH_OK,
+                "Aus Kontoauszug zugeordnet – bitte prüfen!",
+            )
             updated += 1
+        elif not _is_formula_cell(cell_c):
+            # C bereits belegt (sollte nicht vorkommen) – nur Farbe setzen wenn leer
+            pass
         _set_text(row, m.get("text") or "", COLOR_MATCH_OK)
         _set_status(row, STATUS_FOUND, COLOR_MATCH_OK)
 
     for a in match_result.get("ambiguous", []):
         row = a["row"]
+        cell_c = ws.cell(row=row, column=3)
         cands = a.get("candidates") or []
         lines = []
         for c in cands[:3]:
@@ -797,12 +822,98 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
                 f"{(c.get('partner') or '')[:40]}"
             )
         comment = "Mehrdeutig:\n" + "\n".join(lines) if lines else "Mehrere Treffer"
+        if _cell_is_writable(cell_c) or (cell_c.value is None or cell_c.value == ""):
+            if not _is_formula_cell(cell_c):
+                cell_c.value = None
+                _style_payment_cell(cell_c, COLOR_MATCH_AMBIG, comment)
+                updated += 1
         _set_status(row, STATUS_AMBIGUOUS, COLOR_MATCH_AMBIG, comment)
 
     for u in match_result.get("unmatched", []):
         row = u["row"]
+        cell_c = ws.cell(row=row, column=3)
+        if not _is_formula_cell(cell_c) and (cell_c.value is None or cell_c.value == ""):
+            _style_payment_cell(
+                cell_c, COLOR_MATCH_MISS,
+                "Nicht im Kontoauszug gefunden",
+            )
+            updated += 1
         _set_status(row, STATUS_NOT_FOUND, COLOR_MATCH_MISS)
 
-    # Keine Zeilen-Ref-Aenderung an Tabellen (nur Spalten wurden ggf. schon erweitert)
+    for n in match_result.get("no_amount", []):
+        row = n["row"]
+        cell_c = ws.cell(row=row, column=3)
+        if not _is_formula_cell(cell_c) and (cell_c.value is None or cell_c.value == ""):
+            _style_payment_cell(
+                cell_c, COLOR_MATCH_NO_AMT,
+                "Kein Rechnungsbetrag (Spalte H) – Matching nicht möglich",
+            )
+            updated += 1
+        _set_status(row, STATUS_NO_AMOUNT, COLOR_MATCH_NO_AMT)
+
     wb.save(excel_path)
     return updated
+
+
+def prepare_stb_export(excel_path) -> dict:
+    """
+    STB-Export-Modus (Issue #34): behält gefüllte Zahlungsdaten,
+    entfernt Match-Farben/Kommentare und leert die Hilfsspalten Match-Status
+    (und Buchungstext-Füllfarbe). Spalte Match-Status wird ausgeblendet.
+    """
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
+
+    wb = openpyxl.load_workbook(excel_path)
+    ws = _get_invoice_sheet(wb)
+
+    headers = {
+        (ws.cell(row=4, column=c).value or "").strip(): c
+        for c in range(1, ws.max_column + 1)
+        if ws.cell(row=4, column=c).value
+    }
+    col_text = headers.get(COLUMN_BOOKING_TEXT[0])
+    col_status = headers.get(COLUMN_MATCH_STATUS[0])
+
+    cleared_c = 0
+    cleared_status = 0
+    cleared_text = 0
+
+    for row in range(5, ws.max_row + 1):
+        if ws.cell(row=row, column=1).value in (None, ""):
+            continue
+        cell_c = ws.cell(row=row, column=3)
+        if not _is_formula_cell(cell_c):
+            had_fill = cell_c.fill and cell_c.fill.fill_type is not None
+            had_comment = cell_c.comment is not None
+            _clear_cell_fill_comment(cell_c)
+            if had_fill or had_comment:
+                cleared_c += 1
+
+        if col_status:
+            cell_s = ws.cell(row=row, column=col_status)
+            if not _is_formula_cell(cell_s):
+                if cell_s.value not in (None, "") or (
+                    cell_s.fill and cell_s.fill.fill_type
+                ) or cell_s.comment:
+                    cell_s.value = None
+                    _clear_cell_fill_comment(cell_s)
+                    cleared_status += 1
+
+        if col_text:
+            cell_t = ws.cell(row=row, column=col_text)
+            if not _is_formula_cell(cell_t):
+                if cell_t.fill and cell_t.fill.fill_type:
+                    _clear_cell_fill_comment(cell_t)
+                    cleared_text += 1
+
+    if col_status:
+        ws.column_dimensions[get_column_letter(col_status)].hidden = True
+
+    wb.save(excel_path)
+    return {
+        "cleared_payment_styles": cleared_c,
+        "cleared_status": cleared_status,
+        "cleared_text_styles": cleared_text,
+        "status_column_hidden": bool(col_status),
+    }
