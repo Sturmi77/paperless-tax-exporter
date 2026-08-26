@@ -11,8 +11,7 @@ from flask import Flask, render_template, request, jsonify, send_file
 
 from excel_export import create_excel, update_excel_with_ocr, \
                          append_to_excel, get_existing_doc_ids, \
-                         read_invoices_for_matching, update_excel_with_bank_matches, \
-                         write_filtered_bank_xlsx
+                         read_invoices_for_matching, update_excel_with_bank_matches
 from pdf_export import download_pdfs
 from llm_extract import extract_from_ocr, check_ollama_available
 from bank_csv import parse_bank_csv, csv_preview
@@ -1086,14 +1085,9 @@ def api_bank_csv_match():
         invoices = read_invoices_for_matching(excel_path)
         result = match_invoices_to_bank(invoices, bank_rows)
 
-        filtered_path = None
         excel_updated = 0
         if not dry_run:
             excel_updated = update_excel_with_bank_matches(excel_path, result)
-            filtered_name = f"Kontoauszug_gefiltert_{year_label}.xlsx"
-            filtered_path = os.path.join(os.path.dirname(excel_path), filtered_name)
-            _assert_output_path(filtered_path)
-            write_filtered_bank_xlsx(bank_rows, result, filtered_path)
             with job_lock:
                 job_status["excel_path"] = excel_path
 
@@ -1104,9 +1098,6 @@ def api_bank_csv_match():
         payload["csv_rel_path"] = csv_rel
         payload["year_label"] = year_label
         payload["excel_updated"] = excel_updated
-        payload["filtered_bank_file"] = (
-            os.path.basename(filtered_path) if filtered_path else None
-        )
         payload["bank_rows_total"] = len(bank_rows)
         payload["bank_rows_selected"] = sum(1 for b in bank_rows if b.get("selected"))
         return jsonify(payload)
@@ -1116,37 +1107,6 @@ def api_bank_csv_match():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/bank-csv/download-filtered")
-def api_bank_csv_download_filtered():
-    """Download gefilterter Auszug neben gewähltem Excel oder per Jahr-Fallback."""
-    excel_rel = (request.args.get("excel_rel_path") or "").strip()
-    year = re.sub(r"[^\w\-]", "", request.args.get("year", ""))
-    try:
-        if excel_rel:
-            excel_path = _resolve_output_rel(excel_rel)
-            year_guess = year
-            parts = _normalize_rel_path(excel_rel).split("/")
-            if not year_guess and parts and re.fullmatch(r"\d{4}", parts[0]):
-                year_guess = parts[0]
-            year_guess = year_guess or "export"
-            path = os.path.join(
-                os.path.dirname(excel_path), f"Kontoauszug_gefiltert_{year_guess}.xlsx"
-            )
-        elif year:
-            excel_path = _excel_path_for_year(year)
-            path = os.path.join(
-                os.path.dirname(excel_path), f"Kontoauszug_gefiltert_{year}.xlsx"
-            )
-        else:
-            return jsonify({"error": "excel_rel_path oder year fehlt."}), 400
-        _assert_output_path(path)
-        if not os.path.exists(path):
-            return jsonify({"error": "Gefilterter Kontoauszug nicht gefunden."}), 404
-        return send_file(path, as_attachment=True, download_name=os.path.basename(path))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
 
 
 if __name__ == "__main__":

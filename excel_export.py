@@ -603,6 +603,7 @@ def _header_map(ws) -> dict:
 def _ensure_bank_match_columns(ws) -> tuple:
     """
     Stellt sicher, dass Spalten Buchungstext und Match-Status existieren.
+    Erweitert Excel-Tabellen nur um Spalten (Zeilenbereich unverändert) – Issue #32.
     Rückgabe: (col_booking_text, col_match_status)
     """
     headers = _header_map(ws)
@@ -614,25 +615,62 @@ def _ensure_bank_match_columns(ws) -> tuple:
         if "match-status" in name or name == "match status":
             col_status = col
 
-    next_col = ws.max_column + 1
-    # Leere trailing Spalten vermeiden: max_column anhand Header neu bestimmen
     last_header = 0
     for col in range(1, ws.max_column + 1):
         if ws.cell(row=4, column=col).value is not None:
             last_header = col
     next_col = last_header + 1
+    added = False
 
     if col_text is None:
         col_text = next_col
         _header_cell(ws, 4, col_text, COLUMN_BOOKING_TEXT[0], COLUMN_BOOKING_TEXT[2])
         ws.column_dimensions[get_column_letter(col_text)].width = COLUMN_BOOKING_TEXT[1]
         next_col += 1
+        added = True
     if col_status is None:
         col_status = next_col
         _header_cell(ws, 4, col_status, COLUMN_MATCH_STATUS[0], COLUMN_MATCH_STATUS[2])
         ws.column_dimensions[get_column_letter(col_status)].width = COLUMN_MATCH_STATUS[1]
+        added = True
+
+    if added:
+        _expand_table_columns_only(ws, max(col_text, col_status))
 
     return col_text, col_status
+
+
+def _is_formula_cell(cell) -> bool:
+    v = cell.value
+    return isinstance(v, str) and v.startswith("=")
+
+
+def _cell_is_writable(cell) -> bool:
+    """Leer und keine Formel → darf beschrieben werden."""
+    if _is_formula_cell(cell):
+        return False
+    return cell.value is None or cell.value == ""
+
+
+def _expand_table_columns_only(ws, last_col: int) -> None:
+    """
+    Erweitert Tabellen-Refs nur nach rechts (Spalten).
+    Zeilenbereich der bestehenden Tabelle bleibt unverändert – schont Formeln (#32).
+    """
+    from openpyxl.utils import range_boundaries
+
+    for tbl in list(ws.tables.values()):
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+            if last_col <= max_col:
+                continue
+            tbl.ref = (
+                f"{get_column_letter(min_col)}{min_row}:"
+                f"{get_column_letter(last_col)}{max_row}"
+            )
+        except Exception:
+            # Tabelle nicht anfassen, wenn etwas schiefgeht
+            continue
 
 
 def _parse_excel_date(val):
@@ -691,11 +729,11 @@ def read_invoices_for_matching(excel_path) -> list:
 
 def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     """
-    Schreibt Matching-Ergebnis ins Rechnungs-Excel (Issue #25).
-    - gefunden: C=Datum, Buchungstext, Status grün
-    - mehrdeutig: Status gelb + Kommentar, C unberührt
+    Schreibt Matching-Ergebnis NUR in die Rechnungs-Excel (Issue #32).
+    - gefunden: C=Datum (wenn leer/keine Formel), Buchungstext, Status grün
+    - mehrdeutig: Status gelb + Kommentar
     - nicht gefunden: Status orange
-    Manuell befüllte C-Zellen werden nicht überschrieben.
+    Keine Zusatzdatei. Formeln und Tabellen-Zeilenbereiche bleiben erhalten.
     """
     from matching_csv import STATUS_FOUND, STATUS_AMBIGUOUS, STATUS_NOT_FOUND
 
@@ -708,18 +746,36 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     updated = 0
 
     def _set_status(row, status, fill_color, comment=None):
-        cell = ws.cell(row=row, column=col_status, value=status)
+        nonlocal updated
+        cell = ws.cell(row=row, column=col_status)
+        if _is_formula_cell(cell):
+            return
+        cell.value = status
         cell.fill = PatternFill("solid", fgColor=fill_color)
         cell.font = Font(size=10)
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = BORDER
         if comment:
             cell.comment = _make_comment(comment)
+        updated += 1
+
+    def _set_text(row, text, fill_color):
+        nonlocal updated
+        cell = ws.cell(row=row, column=col_text)
+        if _is_formula_cell(cell):
+            return
+        # Nur schreiben wenn leer oder vorheriger Match-Text (kein manueller Freitext-Schutz nötig in v1)
+        cell.value = text or ""
+        cell.fill = PatternFill("solid", fgColor=fill_color)
+        cell.font = Font(size=10)
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+        cell.border = BORDER
+        updated += 1
 
     for m in match_result.get("matches", []):
         row = m["invoice_row"]
         cell_c = ws.cell(row=row, column=3)
-        if cell_c.value is None or cell_c.value == "":
+        if _cell_is_writable(cell_c):
             cell_c.value = m["date"]
             cell_c.number_format = DATE_FORMAT
             cell_c.fill = PatternFill("solid", fgColor=COLOR_MATCH_OK)
@@ -728,13 +784,8 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
             cell_c.border = BORDER
             cell_c.comment = _make_comment("Aus Kontoauszug zugeordnet – bitte prüfen!")
             updated += 1
-        cell_t = ws.cell(row=row, column=col_text, value=m.get("text") or "")
-        cell_t.fill = PatternFill("solid", fgColor=COLOR_MATCH_OK)
-        cell_t.font = Font(size=10)
-        cell_t.alignment = Alignment(horizontal="left", vertical="center")
-        cell_t.border = BORDER
+        _set_text(row, m.get("text") or "", COLOR_MATCH_OK)
         _set_status(row, STATUS_FOUND, COLOR_MATCH_OK)
-        updated += 1
 
     for a in match_result.get("ambiguous", []):
         row = a["row"]
@@ -747,85 +798,11 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
             )
         comment = "Mehrdeutig:\n" + "\n".join(lines) if lines else "Mehrere Treffer"
         _set_status(row, STATUS_AMBIGUOUS, COLOR_MATCH_AMBIG, comment)
-        updated += 1
 
     for u in match_result.get("unmatched", []):
         row = u["row"]
         _set_status(row, STATUS_NOT_FOUND, COLOR_MATCH_MISS)
-        updated += 1
 
-    # Tabellenbereich erweitern falls Tabelle1 existiert
-    last_row = ws.max_row
-    last_col = max(col_text, col_status)
-    for tbl in ws.tables.values():
-        if tbl.displayName == "Tabelle1":
-            tbl.ref = f"A4:{get_column_letter(last_col)}{last_row}"
-            break
-
+    # Keine Zeilen-Ref-Aenderung an Tabellen (nur Spalten wurden ggf. schon erweitert)
     wb.save(excel_path)
     return updated
-
-
-def write_filtered_bank_xlsx(bank_rows: list, match_result: dict, output_path: str) -> str:
-    """
-    Schreibt Kontoauszug_gefiltert_*.xlsx mit matched/ambiguous Zeilen (C3).
-    Farben: grün = zugeordnet, gelb = mehrdeutig.
-    """
-    from matching_csv import STATUS_FOUND, STATUS_AMBIGUOUS
-
-    used = set(match_result.get("used_bank_ids") or [])
-    amb_ids = set()
-    for a in match_result.get("ambiguous", []):
-        for c in a.get("candidates") or []:
-            amb_ids.add(c.get("bank_row_id"))
-
-    match_by_bank = {m["bank_row_id"]: m for m in match_result.get("matches", [])}
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Zugeordnet"
-    headers = ["CSV-Zeile", "Datum", "Betrag", "Partner", "Buchungstext", "Status", "Beleg-Nr."]
-    for i, h in enumerate(headers, start=1):
-        _header_cell(ws, 1, i, h, "center")
-        ws.column_dimensions[get_column_letter(i)].width = [10, 12, 12, 28, 48, 14, 12][i - 1]
-
-    out_row = 2
-    for b in bank_rows:
-        rid = b["row_id"]
-        if rid in used:
-            status = STATUS_FOUND
-            fill = COLOR_MATCH_OK
-            beleg = match_by_bank.get(rid, {}).get("beleg_nr", "")
-        elif rid in amb_ids:
-            status = STATUS_AMBIGUOUS
-            fill = COLOR_MATCH_AMBIG
-            beleg = ""
-        else:
-            continue
-
-        values = [
-            rid,
-            b.get("date"),
-            b.get("amount"),
-            b.get("partner") or "",
-            (b.get("text") or "")[:200],
-            status,
-            beleg,
-        ]
-        for col, val in enumerate(values, start=1):
-            cell = ws.cell(row=out_row, column=col, value=val)
-            cell.fill = PatternFill("solid", fgColor=fill)
-            cell.font = Font(size=10)
-            cell.border = BORDER
-            if col == 2 and val is not None:
-                cell.number_format = DATE_FORMAT
-            if col == 3 and val is not None:
-                cell.number_format = NUMBER_FORMAT
-        out_row += 1
-
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    wb.save(output_path)
-    return output_path
-
-
-# Need date import at top if not present — check excel_export imports
