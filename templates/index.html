@@ -223,26 +223,44 @@
 
       </section>
 
-      <!-- Issue #25: Kontoauszug zuordnen (Nachbearbeitung) -->
+      <!-- Issue #25 / #28 / #29: Kontoauszug zuordnen -->
       <section class="card" id="bank-match-card">
         <div class="card-title-row">
           <h2 class="card-title">Kontoauszug zuordnen</h2>
           <span class="card-title-hint">
-            CSV-Buchungen mit Rechnungszeilen (leeres Zahlungsdatum) abgleichen – Issue #25
+            Dateien aus dem Ausgabeordner waehlen (NAS) – bearbeitete Excels und CSVs
           </span>
         </div>
 
-        <div class="field-row">
-          <div class="field-group">
-            <label class="field-label" for="bank-year">Jahr (Excel)</label>
-            <input class="input" type="text" id="bank-year" placeholder="2025" maxlength="10"
-                   autocomplete="off" aria-describedby="bank-year-hint"/>
-            <p class="field-hint" id="bank-year-hint">Entspricht dem Ordner unter dem Ausgabe-Pfad</p>
+        <div class="field-group">
+          <label class="field-label" for="bank-excel-select">Rechnungs-Excel</label>
+          <div class="bank-file-row">
+            <select class="input" id="bank-excel-select" aria-label="Excel aus Ausgabeordner">
+              <option value="">– Excel laden… –</option>
+            </select>
+            <button type="button" class="btn btn-secondary" id="btn-bank-excel-refresh" title="Liste aktualisieren">Aktualisieren</button>
           </div>
-          <div class="field-group">
-            <label class="field-label" for="bank-csv-file">Kontoauszug (CSV)</label>
-            <input class="input" type="file" id="bank-csv-file" accept=".csv,text/csv"
-                   aria-label="Kontoauszug CSV hochladen"/>
+          <p class="field-hint">Alle .xlsx unter dem Ausgabe-Pfad (auch bearbeitete Dateien)</p>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="bank-csv-select">Kontoauszug (CSV)</label>
+          <div class="bank-file-row">
+            <select class="input" id="bank-csv-select" aria-label="CSV aus Ausgabeordner">
+              <option value="">– CSV laden… –</option>
+            </select>
+            <button type="button" class="btn btn-secondary" id="btn-bank-csv-refresh" title="Liste aktualisieren">Aktualisieren</button>
+          </div>
+          <p class="field-hint">CSV zuvor nach dem Ausgabeordner kopieren, oder optional vom PC hochladen</p>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="bank-csv-file">Optional: CSV vom PC</label>
+          <div class="bank-upload-row">
+            <button type="button" class="btn btn-secondary" id="btn-bank-csv-browse">Datei waehlen…</button>
+            <span id="bank-csv-filename" class="bank-filename">Keine Datei</span>
+            <input type="file" id="bank-csv-file" class="bank-file-native"
+                   accept=".csv,text/csv,text/plain" aria-label="CSV vom PC hochladen"/>
           </div>
         </div>
 
@@ -258,7 +276,7 @@
         </div>
 
         <div class="actions actions-secondary" style="margin-top:12px;">
-          <button class="btn btn-secondary" id="btn-bank-preview" type="button">CSV prüfen</button>
+          <button class="btn btn-secondary" id="btn-bank-preview" type="button">CSV pruefen</button>
           <button class="btn btn-secondary" id="btn-bank-dryrun" type="button">Vorschau Matching</button>
           <button class="btn btn-primary" id="btn-bank-apply" type="button">Zuordnung schreiben</button>
         </div>

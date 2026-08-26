@@ -1062,4 +1062,36 @@ body {
 .bank-match-result .bank-stats {
   margin-bottom: 6px;
 }
+
+/* Issue #28/#29: Server-Dateiauswahl + PC-Upload ohne .input auf type=file */
+.bank-file-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.bank-file-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.bank-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.bank-file-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.bank-filename {
+  font-size: .88rem;
+  color: var(--text-muted, #666);
+  word-break: break-all;
+}
 .subfolder-fieldset legend + * { clear: both; }

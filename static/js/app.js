@@ -1047,18 +1047,89 @@ function resetUI() {
   enableButtons();
 }
 
-// --- Issue #25: Kontoauszug-Matching ---------------------------------
+// --- Issue #25 / #28 / #29: Kontoauszug-Matching ----------------------
 let bankUploadKey = null;
+let bankCsvRelPath = null;
+let bankExcelRelPath = null;
 
 function initBankMatchUI() {
-  const y = $("bank-year");
-  if (y && !y.value) y.value = String(new Date().getFullYear());
   const bp = $("btn-bank-preview");
   const bd = $("btn-bank-dryrun");
   const ba = $("btn-bank-apply");
   if (bp) bp.addEventListener("click", () => bankCsvPreview());
   if (bd) bd.addEventListener("click", () => bankCsvMatch(true));
   if (ba) ba.addEventListener("click", () => bankCsvMatch(false));
+
+  const excelSel = $("bank-excel-select");
+  const csvSel = $("bank-csv-select");
+  if (excelSel) {
+    excelSel.addEventListener("change", function () {
+      bankExcelRelPath = excelSel.value || null;
+    });
+  }
+  if (csvSel) {
+    csvSel.addEventListener("change", function () {
+      bankCsvRelPath = csvSel.value || null;
+      bankUploadKey = null;
+      const fn = $("bank-csv-filename");
+      if (fn && bankCsvRelPath) fn.textContent = bankCsvRelPath;
+    });
+  }
+
+  const browse = $("btn-bank-csv-browse");
+  const fileInput = $("bank-csv-file");
+  if (browse && fileInput) {
+    browse.addEventListener("click", function () { fileInput.click(); });
+    fileInput.addEventListener("change", function () {
+      const f = fileInput.files && fileInput.files[0];
+      const fn = $("bank-csv-filename");
+      if (fn) fn.textContent = f ? f.name : "Keine Datei";
+      if (f) {
+        bankCsvRelPath = null;
+        if (csvSel) csvSel.value = "";
+      }
+    });
+  }
+
+  const rx = $("btn-bank-excel-refresh");
+  const rc = $("btn-bank-csv-refresh");
+  if (rx) rx.addEventListener("click", () => loadBankFileList("xlsx"));
+  if (rc) rc.addEventListener("click", () => loadBankFileList("csv"));
+
+  loadBankFileList("xlsx");
+  loadBankFileList("csv");
+}
+
+async function loadBankFileList(type) {
+  const sel = type === "xlsx" ? $("bank-excel-select") : $("bank-csv-select");
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = type === "xlsx" ? "– Excel waehlen –" : "– CSV waehlen –";
+  sel.appendChild(ph);
+  try {
+    const res = await fetch("/api/bank-csv/files?type=" + encodeURIComponent(type));
+    const data = await res.json();
+    if (!res.ok) {
+      bankMatchShowMsg(data.error || "Dateiliste fehlgeschlagen", true);
+      return;
+    }
+    (data.files || []).forEach(function (f) {
+      const opt = document.createElement("option");
+      opt.value = f.rel_path;
+      opt.textContent = f.rel_path;
+      sel.appendChild(opt);
+    });
+    if (prev) {
+      sel.value = prev;
+      if (type === "xlsx") bankExcelRelPath = sel.value || null;
+      if (type === "csv") bankCsvRelPath = sel.value || null;
+    }
+  } catch (err) {
+    bankMatchShowMsg("Dateiliste: " + err.message, true);
+  }
 }
 
 function bankMatchShowMsg(text, isError) {
@@ -1081,9 +1152,17 @@ function renderBankMatchResult(data) {
   html += "mehrdeutig: " + (s.mehrdeutig || 0) + " · ";
   html += "nicht gefunden: " + (s.nicht_gefunden || 0);
   html += "</div>";
+  if (data.excel_rel_path) {
+    html += "<p>Excel: <code>" + data.excel_rel_path + "</code></p>";
+  }
   if (data.filtered_bank_file) {
-    const year = ($("bank-year") && $("bank-year").value) || "";
-    html += '<p><a class="btn btn-secondary" href="/api/bank-csv/download-filtered?year=' + encodeURIComponent(year) + '">Gefilterten Kontoauszug laden</a></p>';
+    let href = "/api/bank-csv/download-filtered?";
+    if (data.excel_rel_path) {
+      href += "excel_rel_path=" + encodeURIComponent(data.excel_rel_path);
+    } else if (data.year_label) {
+      href += "year=" + encodeURIComponent(data.year_label);
+    }
+    html += '<p><a class="btn btn-secondary" href="' + href + '">Gefilterten Kontoauszug laden</a></p>';
   }
   if ((data.matches || []).length) {
     html += "<details open><summary>Gefunden (" + data.matches.length + ")</summary><ul>";
@@ -1110,21 +1189,33 @@ function renderBankMatchResult(data) {
   box.classList.remove("hidden");
 }
 
+function appendBankFormCommon(fd) {
+  fd.append("dry_run", "true");
+  fd.append("debits_only", ($("bank-debits-only") && $("bank-debits-only").checked) ? "true" : "false");
+  fd.append("only_relevant", ($("bank-only-relevant") && $("bank-only-relevant").checked) ? "true" : "false");
+  const excelRel = ($("bank-excel-select") && $("bank-excel-select").value) || bankExcelRelPath || "";
+  if (excelRel) fd.append("excel_rel_path", excelRel);
+  const csvRel = ($("bank-csv-select") && $("bank-csv-select").value) || bankCsvRelPath || "";
+  const fileInput = $("bank-csv-file");
+  const hasUpload = fileInput && fileInput.files && fileInput.files[0];
+  if (hasUpload) {
+    fd.append("file", fileInput.files[0]);
+  } else if (csvRel) {
+    fd.append("csv_rel_path", csvRel);
+  } else if (bankUploadKey) {
+    fd.append("upload_key", bankUploadKey);
+  }
+  return { excelRel: excelRel, csvRel: csvRel, hasUpload: !!hasUpload };
+}
+
 async function bankCsvPreview() {
   bankMatchShowMsg("");
-  const fileInput = $("bank-csv-file");
-  const year = ($("bank-year") && $("bank-year").value.trim()) || "";
-  if (!fileInput || !fileInput.files || !fileInput.files[0]) {
-    bankMatchShowMsg("Bitte CSV-Datei waehlen.", true);
-    return;
-  }
-  if (!year) {
-    bankMatchShowMsg("Bitte Jahr angeben.", true);
-    return;
-  }
   const fd = new FormData();
-  fd.append("file", fileInput.files[0]);
-  fd.append("year_label", year);
+  const info = appendBankFormCommon(fd);
+  if (!info.hasUpload && !info.csvRel && !bankUploadKey) {
+    bankMatchShowMsg("Bitte CSV aus der Liste waehlen oder vom PC hochladen.", true);
+    return;
+  }
   try {
     const res = await fetch("/api/bank-csv/preview", { method: "POST", body: fd });
     const data = await res.json();
@@ -1132,12 +1223,17 @@ async function bankCsvPreview() {
       bankMatchShowMsg(data.error || "Preview fehlgeschlagen", true);
       return;
     }
-    bankUploadKey = data.upload_key || data.saved_path;
+    if (data.csv_rel_path) bankCsvRelPath = data.csv_rel_path;
+    if (data.upload_key) bankUploadKey = data.upload_key;
     bankMatchShowMsg(
       "CSV OK · Preset: " + (data.preset || "?") + " · Delimiter: " + (data.delimiter || "?") +
-      " · Spalten: " + (data.fieldnames || []).length + " · Key: " + bankUploadKey,
+      " · Spalten: " + (data.fieldnames || []).length +
+      (data.csv_rel_path ? (" · " + data.csv_rel_path) : ""),
       false
     );
+    if (data.csv_rel_path && data.csv_rel_path.indexOf("_uploads/") === 0) {
+      loadBankFileList("csv");
+    }
   } catch (err) {
     bankMatchShowMsg("Verbindungsfehler: " + err.message, true);
   }
@@ -1145,23 +1241,15 @@ async function bankCsvPreview() {
 
 async function bankCsvMatch(dryRun) {
   bankMatchShowMsg("");
-  const year = ($("bank-year") && $("bank-year").value.trim()) || "";
-  if (!year) {
-    bankMatchShowMsg("Bitte Jahr angeben.", true);
+  const fd = new FormData();
+  const info = appendBankFormCommon(fd);
+  fd.set("dry_run", dryRun ? "true" : "false");
+  if (!info.excelRel) {
+    bankMatchShowMsg("Bitte Rechnungs-Excel aus der Liste waehlen.", true);
     return;
   }
-  const fileInput = $("bank-csv-file");
-  const fd = new FormData();
-  fd.append("year_label", year);
-  fd.append("dry_run", dryRun ? "true" : "false");
-  fd.append("debits_only", ($("bank-debits-only") && $("bank-debits-only").checked) ? "true" : "false");
-  fd.append("only_relevant", ($("bank-only-relevant") && $("bank-only-relevant").checked) ? "true" : "false");
-  if (fileInput && fileInput.files && fileInput.files[0]) {
-    fd.append("file", fileInput.files[0]);
-  } else if (bankUploadKey) {
-    fd.append("upload_key", bankUploadKey);
-  } else {
-    bankMatchShowMsg("Bitte zuerst CSV waehlen (oder CSV pruefen).", true);
+  if (!info.hasUpload && !info.csvRel && !bankUploadKey) {
+    bankMatchShowMsg("Bitte CSV aus der Liste waehlen oder vom PC hochladen.", true);
     return;
   }
   if (!dryRun) {
@@ -1176,6 +1264,8 @@ async function bankCsvMatch(dryRun) {
       return;
     }
     if (data.upload_key) bankUploadKey = data.upload_key;
+    if (data.csv_rel_path) bankCsvRelPath = data.csv_rel_path;
+    if (data.excel_rel_path) bankExcelRelPath = data.excel_rel_path;
     renderBankMatchResult(data);
     bankMatchShowMsg(
       dryRun
