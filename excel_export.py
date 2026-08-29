@@ -15,7 +15,9 @@ Spalten:
 """
 
 import os
+import re
 from datetime import datetime, date
+from typing import Optional
 import openpyxl
 from openpyxl.styles import (
     Font, PatternFill, Alignment, Border, Side
@@ -57,8 +59,9 @@ COLUMN_BOOKING_TEXT = ("Buchungstext", 42.0, "left")
 COLUMN_MATCH_STATUS = ("Match-Status", 16.0, "center")
 
 COLOR_MATCH_OK      = "C6EFCE"  # Grün – gefunden
-COLOR_MATCH_AMBIG   = "FFFFC7"  # Gelb – mehrdeutig (wie OCR)
-COLOR_MATCH_MISS    = "FCE4D6"  # Orange – nicht gefunden
+COLOR_MATCH_AMBIG   = "FFFFC7"  # Gelb – mehrdeutig
+COLOR_MATCH_MISS    = "FFC7CE"  # Rot – nicht gefunden (Issue #34)
+COLOR_MATCH_NO_AMT  = "D9D9D9"  # Grau – kein Betrag
 
 DATE_FORMAT   = "DD.MM.YYYY"
 NUMBER_FORMAT = '#,##0.00 "€"'
@@ -175,7 +178,7 @@ def _build_cell_formula(subfolder_path: str) -> str:
 def create_excel(documents, pdf_map, output_path, year_label,
                  unc_base=None, ocr_results=None, subfolder: str = "",
                  hyperlink_mode: str = "cell", include_text_path: bool = False,
-                 progress_fn=None):
+                 progress_fn=None, overwrite: bool = False):
     """
     Erstellt die Excel-Datei im Steuerberater-Format (Stufe 1).
 
@@ -189,7 +192,15 @@ def create_excel(documents, pdf_map, output_path, year_label,
     hyperlink_mode:    "cell" = CELL()-Formel (portabel); "unc" = absoluter UNC-Pfad (Issue #8)
     include_text_path: True = Spalte K mit kopierbarem UNC-Pfad (Issue #8)
     progress_fn:       optional callable(idx, total, title) – Fortschritt pro Zeile (Issue #19)
+    overwrite:         False (Default): bestehende Datei nie überschreiben (manuelle Arbeit schützen)
     """
+    if os.path.exists(output_path) and not overwrite:
+        raise FileExistsError(
+            f"Excel existiert bereits und wird nicht überschrieben "
+            f"(manuelle Einträge schützen): {output_path}. "
+            f"Bitte „Nur neue hinzufügen“ (Append) verwenden."
+        )
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Rechnungsaufstellung"
@@ -352,6 +363,20 @@ def create_excel(documents, pdf_map, output_path, year_label,
     return output_path
 
 
+def _cell_fill_is(cell, hex6: str) -> bool:
+    """Vergleicht Zellenfarbe robust (mit/ohne Alpha-Prefix)."""
+    try:
+        fill = cell.fill
+        if not fill or not fill.fgColor:
+            return False
+        rgb = fill.fgColor.rgb
+        if rgb is None:
+            return False
+        return str(rgb).upper().endswith(str(hex6).upper())
+    except Exception:
+        return False
+
+
 def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
                           subfolder: str = ""):
     """
@@ -396,8 +421,7 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
         # Spalte E (Absender) – nur überschreiben wenn leer oder gelb
         cell_e = ws.cell(row=row_num, column=5)
         e_is_empty = cell_e.value is None or cell_e.value == ""
-        e_is_ocr   = (cell_e.fill and cell_e.fill.fgColor and
-                      cell_e.fill.fgColor.rgb == COLOR_OCR_BG)
+        e_is_ocr   = _cell_fill_is(cell_e, COLOR_OCR_BG)
         if absender and (e_is_empty or e_is_ocr):
             cell_e.value      = absender
             cell_e.fill       = YELLOW_FILL
@@ -410,8 +434,7 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
         # Spalte H (Rechnungssumme) – nur überschreiben wenn leer oder gelb
         cell_h = ws.cell(row=row_num, column=8)
         h_is_empty = cell_h.value is None or cell_h.value == ""
-        h_is_ocr   = (cell_h.fill and cell_h.fill.fgColor and
-                      cell_h.fill.fgColor.rgb == COLOR_OCR_BG)
+        h_is_ocr   = _cell_fill_is(cell_h, COLOR_OCR_BG)
         if betrag is not None and (h_is_empty or h_is_ocr):
             cell_h.value         = betrag
             cell_h.fill          = YELLOW_FILL
@@ -422,10 +445,15 @@ def update_excel_with_ocr(excel_path, ocr_results, unc_base, year_label,
             cell_h.comment       = _make_comment("OCR-Vorschlag – bitte prüfen!")
             updated += 1
 
-        # Spalte J (Hyperlink) – nur wenn noch kein Hyperlink vorhanden
+        # Spalte J (Hyperlink) – nur Plain-Filename → HYPERLINK; CELL()-Formeln unangetastet
         cell_j = ws.cell(row=row_num, column=10)
-        filename = str(cell_j.value or "")
-        if filename and unc_base and not str(filename).startswith("=HYPERLINK"):
+        raw_j = cell_j.value
+        if raw_j is None or raw_j == "":
+            continue
+        filename = str(raw_j)
+        if filename.startswith("="):
+            continue  # bestehende Formel (CELL/HYPERLINK) nicht umschreiben
+        if unc_base:
             unc_path = _build_unc_path(unc_base, year_label, filename, subfolder)
             cell_j.value      = f'=HYPERLINK("{unc_path}","{filename}")'
             cell_j.font       = Font(size=10, color=COLOR_HYPERLINK, underline="single")
@@ -567,23 +595,51 @@ def append_to_excel(new_documents, pdf_map, excel_path, year_label,
         else:
             _data_cell(ws, row, 10, filename, align="left")
 
-    # SUMME-Formel auf neue letzte Zeile ausdehnen
+    # SUMME-Formel auf neue letzte Zeile ausdehnen – nur eigenes SUM, keine manuellen H1-Formeln
     new_last_row = insert_start + len(sorted_new) - 1
-    ws["H1"] = f"=SUM(H5:H{new_last_row})"
-    ws["H1"].number_format = NUMBER_FORMAT
-    ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
-    ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
-    ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
-    ws["H1"].border        = BORDER
+    h1 = ws["H1"]
+    h1_val = h1.value
+    if h1_val is None or (
+        isinstance(h1_val, str) and h1_val.strip().upper().startswith("=SUM")
+    ):
+        ws["H1"] = f"=SUM(H5:H{new_last_row})"
+        ws["H1"].number_format = NUMBER_FORMAT
+        ws["H1"].font          = Font(bold=True, size=11, color=COLOR_SUM_FONT)
+        ws["H1"].fill          = PatternFill("solid", fgColor=COLOR_SUM_BG)
+        ws["H1"].alignment     = Alignment(horizontal="right", vertical="center")
+        ws["H1"].border        = BORDER
 
-    # Tabellen-Referenz ausweiten
-    for tbl in ws.tables.values():
-        if tbl.displayName == "Tabelle1":
-            tbl.ref = f"A4:{get_column_letter(len(COLUMNS))}{new_last_row}"
-            break
+    # Tabellen-Zeilen erweitern (Spaltenbreite behalten, nie schrumpfen) + Columns syncen
+    _expand_invoice_table_rows(ws, new_last_row, include_text_path=include_text_path)
 
     wb.save(excel_path)
     return len(sorted_new)
+
+
+def _expand_invoice_table_rows(ws, new_last_row: int, *, include_text_path: bool = False) -> None:
+    """
+    Erweitert die Rechnungs-Tabelle nach unten. Spaltenbreite bleibt mindestens
+    der bisherige Stand (kein Schrumpfen auf len(COLUMNS) – schont Match-Spalten).
+    """
+    from openpyxl.utils import range_boundaries
+
+    tbl = _find_invoice_table(ws)
+    if tbl is None:
+        return
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+        needed = 11 if include_text_path else len(COLUMNS)
+        last_col = max(max_col, needed)
+        if new_last_row < max_row and last_col == max_col:
+            return
+        end_row = max(max_row, new_last_row)
+        tbl.ref = (
+            f"{get_column_letter(min_col)}{min_row}:"
+            f"{get_column_letter(last_col)}{end_row}"
+        )
+        _sync_table_columns_from_header(ws, tbl)
+    except Exception:
+        return
 
 
 # ── Issue #25: Kontoauszug-Matching ───────────────────────────────────
@@ -603,9 +659,12 @@ def _header_map(ws) -> dict:
 def _ensure_bank_match_columns(ws) -> tuple:
     """
     Stellt sicher, dass Spalten Buchungstext und Match-Status existieren.
-    Erweitert Excel-Tabellen nur um Spalten (Zeilenbereich unverändert) – Issue #32.
+    Neue Spalten werden direkt rechts an die Rechnungs-Tabelle gehängt
+    (nicht hinter fremde Spalten/Tabellen). Issue #32 / Excel-Repair.
     Rückgabe: (col_booking_text, col_match_status)
     """
+    from openpyxl.utils import range_boundaries
+
     headers = _header_map(ws)
     col_text = None
     col_status = None
@@ -615,26 +674,48 @@ def _ensure_bank_match_columns(ws) -> tuple:
         if "match-status" in name or name == "match status":
             col_status = col
 
-    last_header = 0
-    for col in range(1, ws.max_column + 1):
-        if ws.cell(row=4, column=col).value is not None:
-            last_header = col
-    next_col = last_header + 1
+    tbl = _find_invoice_table(ws)
+    if tbl is not None:
+        try:
+            _min_c, _min_r, max_col, _max_r = range_boundaries(tbl.ref)
+            next_col = max_col + 1
+        except Exception:
+            next_col = None
+    else:
+        next_col = None
+
+    if next_col is None:
+        last_header = 0
+        for col in range(1, ws.max_column + 1):
+            if ws.cell(row=4, column=col).value is not None:
+                last_header = col
+        next_col = last_header + 1
+
     added = False
 
+    def _claim_header_col(preferred: int) -> int:
+        """Nächste freie Header-Zelle ab preferred (keine Übernahme fremder Inhalte)."""
+        col = preferred
+        for _ in range(50):
+            val = ws.cell(row=4, column=col).value
+            if val is None or str(val).strip() == "":
+                return col
+            col += 1
+        return preferred
+
     if col_text is None:
-        col_text = next_col
+        col_text = _claim_header_col(next_col)
         _header_cell(ws, 4, col_text, COLUMN_BOOKING_TEXT[0], COLUMN_BOOKING_TEXT[2])
         ws.column_dimensions[get_column_letter(col_text)].width = COLUMN_BOOKING_TEXT[1]
-        next_col += 1
+        next_col = col_text + 1
         added = True
     if col_status is None:
-        col_status = next_col
+        col_status = _claim_header_col(next_col)
         _header_cell(ws, 4, col_status, COLUMN_MATCH_STATUS[0], COLUMN_MATCH_STATUS[2])
         ws.column_dimensions[get_column_letter(col_status)].width = COLUMN_MATCH_STATUS[1]
         added = True
 
-    if added:
+    if added or tbl is not None:
         _expand_table_columns_only(ws, max(col_text, col_status))
 
     return col_text, col_status
@@ -645,32 +726,151 @@ def _is_formula_cell(cell) -> bool:
     return isinstance(v, str) and v.startswith("=")
 
 
+def _cell_is_empty(cell) -> bool:
+    """True wenn kein nutzbarer Wert (None, '', Whitespace)."""
+    v = cell.value
+    if v is None:
+        return True
+    if isinstance(v, str) and v.strip() == "":
+        return True
+    return False
+
+
 def _cell_is_writable(cell) -> bool:
-    """Leer und keine Formel → darf beschrieben werden."""
+    """Leer und keine Formel → Wert darf geschrieben werden."""
     if _is_formula_cell(cell):
         return False
-    return cell.value is None or cell.value == ""
+    return _cell_is_empty(cell)
+
+
+# Bekannte App-Statuswerte – dürfen bei Re-Run aktualisiert werden
+_MATCH_STATUS_VALUES = frozenset({
+    "offen", "gefunden", "mehrdeutig", "nicht gefunden", "kein Betrag",
+})
+
+
+def _status_cell_writable(cell) -> bool:
+    """Match-Status: leer oder bereits App-Status (kein manueller Freitext)."""
+    if _is_formula_cell(cell):
+        return False
+    if _cell_is_empty(cell):
+        return True
+    return str(cell.value).strip() in _MATCH_STATUS_VALUES
+
+
+def _find_invoice_table(ws):
+    """
+    Liefert die Rechnungs-Tabelle (oder None).
+    Preferenz: displayName Tabelle1, sonst Tabelle die Header-Zeile 4 abdeckt.
+    """
+    from openpyxl.utils import range_boundaries
+
+    tables = list(ws.tables.values())
+    if not tables:
+        return None
+    for tbl in tables:
+        if (tbl.displayName or "").strip().lower() in ("tabelle1", "table1"):
+            return tbl
+    for tbl in tables:
+        try:
+            _c1, r1, _c2, r2 = range_boundaries(tbl.ref)
+            if r1 <= 4 <= r2:
+                return tbl
+        except Exception:
+            continue
+    return tables[0]
+
+
+def _sync_table_columns_from_header(ws, tbl) -> None:
+    """
+    tableColumns + autoFilter an tbl.ref und Header-Zeile anpassen.
+    Verhindert Excel-Reparatur („Teil /xl/tables/tableN.xml entfernt“).
+    """
+    from openpyxl.utils import range_boundaries
+    from openpyxl.worksheet.table import TableColumn
+
+    min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+    used_names = set()
+    columns = []
+    for idx, col in enumerate(range(min_col, max_col + 1), start=1):
+        raw = ws.cell(row=min_row, column=col).value
+        name = str(raw).replace("\n", " ").strip() if raw not in (None, "") else ""
+        if not name:
+            name = f"Spalte{idx}"
+            ws.cell(row=min_row, column=col).value = name
+        # Excel verlangt eindeutige Spaltennamen in Tabellen
+        base = name
+        n = 2
+        while name.lower() in used_names:
+            name = f"{base} ({n})"
+            n += 1
+        used_names.add(name.lower())
+        columns.append(TableColumn(id=idx, name=name))
+
+    tbl.tableColumns = columns
+    if tbl.autoFilter is not None:
+        tbl.autoFilter.ref = tbl.ref
+    else:
+        try:
+            from openpyxl.worksheet.filters import AutoFilter
+            tbl.autoFilter = AutoFilter(ref=tbl.ref)
+        except Exception:
+            pass
+
+
+def _table_ranges_overlap(ref_a: str, ref_b: str) -> bool:
+    from openpyxl.utils import range_boundaries
+    a1, r1, a2, r2 = range_boundaries(ref_a)
+    b1, s1, b2, s2 = range_boundaries(ref_b)
+    return not (a2 < b1 or b2 < a1 or r2 < s1 or s2 < r1)
 
 
 def _expand_table_columns_only(ws, last_col: int) -> None:
     """
-    Erweitert Tabellen-Refs nur nach rechts (Spalten).
-    Zeilenbereich der bestehenden Tabelle bleibt unverändert – schont Formeln (#32).
+    Erweitert NUR die Rechnungs-Tabelle nach rechts (Spalten).
+    Zeilenbereich unverändert. tableColumns werden synchronisiert (#32 / Repair-Fix).
+    Andere Tabellen werden nicht angefasst (Überlappung → Excel entfernt table2).
     """
     from openpyxl.utils import range_boundaries
 
-    for tbl in list(ws.tables.values()):
+    tbl = _find_invoice_table(ws)
+    if tbl is None:
+        return
+
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+    except Exception:
+        return
+
+    if last_col <= max_col:
+        # Ref passt schon – trotzdem Columns syncen falls Header neu sind
         try:
-            min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
-            if last_col <= max_col:
-                continue
-            tbl.ref = (
-                f"{get_column_letter(min_col)}{min_row}:"
-                f"{get_column_letter(last_col)}{max_row}"
-            )
+            _sync_table_columns_from_header(ws, tbl)
         except Exception:
-            # Tabelle nicht anfassen, wenn etwas schiefgeht
+            pass
+        return
+
+    new_ref = (
+        f"{get_column_letter(min_col)}{min_row}:"
+        f"{get_column_letter(last_col)}{max_row}"
+    )
+
+    # Nicht erweitern, wenn eine andere Tabelle dadurch überlappen würde
+    for other in ws.tables.values():
+        if other is tbl or other.name == tbl.name:
             continue
+        try:
+            if _table_ranges_overlap(new_ref, other.ref):
+                return
+        except Exception:
+            continue
+
+    try:
+        tbl.ref = new_ref
+        _sync_table_columns_from_header(ws, tbl)
+    except Exception:
+        # Tabelle nicht anfassen, wenn etwas schiefgeht
+        return
 
 
 def _parse_excel_date(val):
@@ -689,10 +889,254 @@ def _parse_excel_date(val):
     return None
 
 
+def _cell_as_float(value):
+    """Zahl aus Zelle; Formeln/leer → None (openpyxl data_only ohne Cache)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and value.strip().startswith("="):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cell_is_blank(value) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _beleg_nr_missing(beleg) -> bool:
+    """True wenn Spalte A keine nutzbare Beleg-Nr. hat."""
+    if _cell_is_blank(beleg):
+        return True
+    if isinstance(beleg, str) and beleg.strip() in ("-", "–", "—", "?"):
+        return True
+    return False
+
+
+def _beleg_as_int(beleg) -> Optional[int]:
+    """Numerische Beleg-Nr. (84, 100, '0001'); Formeln/leer → None."""
+    if isinstance(beleg, str) and beleg.strip().startswith("="):
+        return None
+    if _beleg_nr_missing(beleg):
+        return None
+    if isinstance(beleg, bool):
+        return None
+    if isinstance(beleg, (int, float)):
+        return int(beleg)
+    s = str(beleg).strip().replace(" ", "")
+    if re.fullmatch(r"\d+", s):
+        return int(s)
+    return None
+
+
+BELEG_AUTO_COMMENT = "Automatisch vergeben – bitte prüfen!"
+
+
+def _row_has_invoice_content(ws, row: int) -> bool:
+    """True wenn die Zeile wie eine Rechnung aussieht (nicht nur Padding)."""
+    beleg = ws.cell(row=row, column=1).value
+    re_raw = ws.cell(row=row, column=2).value
+    absender = ws.cell(row=row, column=5).value
+    beschreibung = ws.cell(row=row, column=6).value
+    absender_s = str(absender).strip() if absender else ""
+    beschreibung_s = str(beschreibung).strip() if beschreibung else ""
+    h = _cell_as_float(ws.cell(row=row, column=8).value)
+    i = _cell_as_float(ws.cell(row=row, column=9).value)
+    return (
+        (not _cell_is_blank(beleg) and not (isinstance(beleg, str) and beleg.startswith("=")))
+        or _parse_excel_date(re_raw) is not None
+        or bool(absender_s)
+        or bool(beschreibung_s)
+        or h is not None
+        or i is not None
+    )
+
+
+def _max_existing_beleg_nr(ws) -> int:
+    mx = 0
+    for row in range(5, ws.max_row + 1):
+        n = _beleg_as_int(ws.cell(row=row, column=1).value)
+        if n is not None and n > mx:
+            mx = n
+    return mx
+
+
+def _beleg_cell_assignable(cell) -> bool:
+    """
+    Wie Matching-Schreibschutz: nur wirklich leere Zellen, keine Formeln,
+    keine vorhandenen Werte (auch keine Platzhalter).
+    """
+    return _cell_is_writable(cell)
+
+
+def plan_auto_beleg_numbers(excel_path) -> list:
+    """
+    Plant fortlaufende Beleg-Nrn. für Inhaltszeilen mit leerer Spalte A.
+    Start = max(vorhandene numerische Beleg-Nrn.) + 1.
+    Schreibt nicht. Formeln und befüllte Zellen werden übersprungen.
+    Rückgabe: [{row, proposed_beleg_nr, absender, ...}, ...]
+    """
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
+
+    # Ohne data_only: Formeln in A erkennen (nicht überschreiben)
+    wb = openpyxl.load_workbook(excel_path)
+    ws = _get_invoice_sheet(wb)
+    next_nr = _max_existing_beleg_nr(ws) + 1
+    max_existing = next_nr - 1
+    planned = []
+    for row in range(5, ws.max_row + 1):
+        if not _row_has_invoice_content(ws, row):
+            continue
+        cell_a = ws.cell(row=row, column=1)
+        if not _beleg_cell_assignable(cell_a):
+            continue
+        absender = ws.cell(row=row, column=5).value
+        beschreibung = ws.cell(row=row, column=6).value
+        planned.append({
+            "row": row,
+            "beleg_nr": None,
+            "proposed_beleg_nr": next_nr,
+            "re_dat": _parse_excel_date(ws.cell(row=row, column=2).value),
+            "absender": str(absender).strip() if absender else "",
+            "beschreibung": str(beschreibung).strip() if beschreibung else "",
+            "betrag": (
+                _cell_as_float(ws.cell(row=row, column=9).value)
+                or _cell_as_float(ws.cell(row=row, column=8).value)
+            ),
+            "code": "beleg_auto_assign",
+            "message": (
+                f"Zeile {row}: Beleg-Nr. → {next_nr} "
+                f"(automatisch, bitte prüfen)"
+            ),
+            "max_existing_beleg_nr": max_existing,
+        })
+        next_nr += 1
+    wb.close()
+    return planned
+
+
+def apply_auto_beleg_numbers(excel_path, planned: list | None = None) -> list:
+    """
+    Vergibt Beleg-Nrn. in Spalte A (gelb + „bitte prüfen“).
+
+    Schreibschutz (wie Bank-Match):
+      - nur leere Zellen (keine vorhandenen Werte/Platzhalter)
+      - keine Formeln
+      - Nummern werden live aus max(A)+1 neu berechnet (kein Blind-Schreiben
+        aus veralteter Vorschau)
+      - bestehende Füllungen/Kommentare auf nicht-leeren Zellen bleiben unberührt
+    """
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
+
+    wb = openpyxl.load_workbook(excel_path)
+    ws = _get_invoice_sheet(wb)
+
+    # Zeilenreihenfolge: Vorschau beibehalten, sonst Sheet-Scan
+    if planned:
+        candidate_rows = [p["row"] for p in planned if p.get("row") is not None]
+    else:
+        candidate_rows = [
+            row for row in range(5, ws.max_row + 1)
+            if _row_has_invoice_content(ws, row)
+        ]
+
+    next_nr = _max_existing_beleg_nr(ws) + 1
+    applied = []
+    for row in candidate_rows:
+        cell = ws.cell(row=row, column=1)
+        if not _beleg_cell_assignable(cell):
+            continue
+        if not _row_has_invoice_content(ws, row):
+            continue
+
+        cell.value = next_nr
+        cell.fill = PatternFill("solid", fgColor=COLOR_OCR_BG)
+        cell.font = Font(size=10)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = BORDER
+        cell.comment = _make_comment(BELEG_AUTO_COMMENT)
+
+        absender = ws.cell(row=row, column=5).value
+        beschreibung = ws.cell(row=row, column=6).value
+        applied.append({
+            "row": row,
+            "beleg_nr": next_nr,
+            "proposed_beleg_nr": next_nr,
+            "re_dat": _parse_excel_date(ws.cell(row=row, column=2).value),
+            "absender": str(absender).strip() if absender else "",
+            "beschreibung": str(beschreibung).strip() if beschreibung else "",
+            "betrag": (
+                _cell_as_float(ws.cell(row=row, column=9).value)
+                or _cell_as_float(ws.cell(row=row, column=8).value)
+            ),
+            "code": "beleg_auto_assign",
+            "message": (
+                f"Zeile {row}: Beleg-Nr. → {next_nr} "
+                f"(automatisch, bitte prüfen)"
+            ),
+        })
+        next_nr += 1
+
+    if applied:
+        wb.save(excel_path)
+    wb.close()
+    return applied
+
+
+def collect_missing_beleg_issues(invoices: list, planned: list | None = None) -> list:
+    """
+    Datenqualität / Auto-Vergabe-Vorschau für Zeilen ohne Beleg-Nr.
+    planned: optional plan_auto_beleg_numbers()-Ergebnis (proposed_beleg_nr).
+    """
+    by_row = {p["row"]: p for p in (planned or [])}
+    issues = []
+    for inv in invoices:
+        if not _beleg_nr_missing(inv.get("beleg_nr")):
+            continue
+        prop = by_row.get(inv.get("row"), {})
+        proposed = prop.get("proposed_beleg_nr")
+        issues.append({
+            "row": inv.get("row"),
+            "beleg_nr": inv.get("beleg_nr"),
+            "proposed_beleg_nr": proposed,
+            "re_dat": inv.get("re_dat"),
+            "absender": inv.get("absender") or "",
+            "beschreibung": inv.get("beschreibung") or "",
+            "betrag": inv.get("betrag"),
+            "code": "beleg_auto_assign",
+            "message": (
+                f"Zeile {inv.get('row')}: Beleg-Nr. → {proposed} "
+                f"(automatisch, bitte prüfen)"
+                if proposed is not None
+                else (
+                    f"Zeile {inv.get('row')}: Beleg-Nr. (Spalte A) fehlt – "
+                    f"{(inv.get('absender') or inv.get('beschreibung') or 'ohne Absender')}"
+                )
+            ),
+        })
+    return issues
+
+
 def read_invoices_for_matching(excel_path) -> list:
     """
     Liest Rechnungszeilen mit **leerem Zahlungsdatum (C)** fürs Matching.
     Rückgabe: [{row, beleg_nr, re_dat, absender, beschreibung, betrag}, ...]
+
+    Zeilen ohne Beleg-Nr. (A) werden mitgenommen, wenn sonst Inhalt da ist
+    (Re-Dat / Absender / Beschreibung / Betrag) – in bearbeiteten Dateien
+    fehlen Belegnummern oft, obwohl die Rechnung vollständig ist.
+    Reine Padding-Zeilen (alles leer) werden übersprungen.
+    Beim Schreiben vergibt apply_auto_beleg_numbers() fortlaufende Nummern
+    (gelb + „bitte prüfen“).
+
+    Betrag für Bank-Abgleich:
+      Spalte I (Rechnungssumme inkl. Privatanteil), falls gesetzt –
+      die Bank bucht den Vollbetrag. Sonst Spalte H (Rechnungssumme).
+      H ist oft eine Anteil-Formel (z. B. I*0.11); ohne Excel-Cache liefert
+      data_only dafür None – I bleibt dann die einzige nutzbare Zahl.
     """
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
@@ -701,41 +1145,77 @@ def read_invoices_for_matching(excel_path) -> list:
     ws = _get_invoice_sheet(wb)
     invoices = []
     for row in range(5, ws.max_row + 1):
-        beleg = ws.cell(row=row, column=1).value
-        if beleg is None or beleg == "":
-            continue
         zahlung = ws.cell(row=row, column=3).value
-        if zahlung is not None and zahlung != "":
+        if not _cell_is_blank(zahlung):
             continue  # Entscheidung #2: nur leeres C
+
+        beleg = ws.cell(row=row, column=1).value
         re_dat = _parse_excel_date(ws.cell(row=row, column=2).value)
         absender = ws.cell(row=row, column=5).value
         beschreibung = ws.cell(row=row, column=6).value
-        betrag = ws.cell(row=row, column=8).value
-        try:
-            betrag_f = float(betrag) if betrag is not None and betrag != "" else None
-        except (TypeError, ValueError):
-            betrag_f = None
+        absender_s = str(absender).strip() if absender else ""
+        beschreibung_s = str(beschreibung).strip() if beschreibung else ""
+        # Bank = Vollbetrag (I), steuerlicher Anteil (H) nur als Fallback
+        betrag_f = _cell_as_float(ws.cell(row=row, column=9).value)
+        if betrag_f is None:
+            betrag_f = _cell_as_float(ws.cell(row=row, column=8).value)
+
+        has_content = (
+            not _cell_is_blank(beleg)
+            or re_dat is not None
+            or bool(absender_s)
+            or bool(beschreibung_s)
+            or betrag_f is not None
+        )
+        if not has_content:
+            continue  # Padding / leere Tabellenzeile
+
         invoices.append({
             "row": row,
             "beleg_nr": beleg,
             "re_dat": re_dat,
-            "absender": str(absender).strip() if absender else "",
-            "beschreibung": str(beschreibung).strip() if beschreibung else "",
+            "absender": absender_s,
+            "beschreibung": beschreibung_s,
             "betrag": betrag_f,
         })
     wb.close()
     return invoices
 
 
+def _clear_cell_fill_comment(cell) -> None:
+    cell.fill = PatternFill(fill_type=None)
+    cell.comment = None
+
+
+def _style_payment_cell(cell, fill_color, comment=None):
+    """Farbe/Kommentar auf Spalte C (führender Indikator, Issue #34)."""
+    if _is_formula_cell(cell):
+        return False
+    cell.fill = PatternFill("solid", fgColor=fill_color)
+    cell.font = Font(size=10)
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    cell.border = BORDER
+    if comment:
+        cell.comment = _make_comment(comment)
+    return True
+
+
 def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     """
-    Schreibt Matching-Ergebnis NUR in die Rechnungs-Excel (Issue #32).
-    - gefunden: C=Datum (wenn leer/keine Formel), Buchungstext, Status grün
-    - mehrdeutig: Status gelb + Kommentar
-    - nicht gefunden: Status orange
+    Schreibt Matching-Ergebnis NUR in die Rechnungs-Excel (Issue #32 / #34).
+    Führend: Spalte C (Zahlungsdatum) – Wert + Farbe.
+
+    Schreibschutz: Werte nur in zuvor leere Zellen (keine Formeln).
+    - C: Datum nur wenn leer
+    - Buchungstext: nur wenn leer
+    - Match-Status: nur wenn leer oder bekannter App-Status (Re-Run)
+    - Farbe/Kommentar auf C nur wenn C leer (kein Übermalen befüllter Daten)
+
     Keine Zusatzdatei. Formeln und Tabellen-Zeilenbereiche bleiben erhalten.
     """
-    from matching_csv import STATUS_FOUND, STATUS_AMBIGUOUS, STATUS_NOT_FOUND
+    from matching_csv import (
+        STATUS_FOUND, STATUS_AMBIGUOUS, STATUS_NOT_FOUND, STATUS_NO_AMOUNT,
+    )
 
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
@@ -748,7 +1228,7 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     def _set_status(row, status, fill_color, comment=None):
         nonlocal updated
         cell = ws.cell(row=row, column=col_status)
-        if _is_formula_cell(cell):
+        if not _status_cell_writable(cell):
             return
         cell.value = status
         cell.fill = PatternFill("solid", fgColor=fill_color)
@@ -762,9 +1242,8 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     def _set_text(row, text, fill_color):
         nonlocal updated
         cell = ws.cell(row=row, column=col_text)
-        if _is_formula_cell(cell):
+        if not _cell_is_writable(cell):
             return
-        # Nur schreiben wenn leer oder vorheriger Match-Text (kein manueller Freitext-Schutz nötig in v1)
         cell.value = text or ""
         cell.fill = PatternFill("solid", fgColor=fill_color)
         cell.font = Font(size=10)
@@ -772,18 +1251,28 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
         cell.border = BORDER
         updated += 1
 
+    def _mark_empty_c(row, fill_color, comment=None):
+        """Farbe/Kommentar auf C nur wenn leer (kein Wert schreiben)."""
+        nonlocal updated
+        cell_c = ws.cell(row=row, column=3)
+        if not _cell_is_writable(cell_c):
+            return
+        _style_payment_cell(cell_c, fill_color, comment)
+        updated += 1
+
     for m in match_result.get("matches", []):
         row = m["invoice_row"]
         cell_c = ws.cell(row=row, column=3)
-        if _cell_is_writable(cell_c):
-            cell_c.value = m["date"]
-            cell_c.number_format = DATE_FORMAT
-            cell_c.fill = PatternFill("solid", fgColor=COLOR_MATCH_OK)
-            cell_c.font = Font(size=10)
-            cell_c.alignment = Alignment(horizontal="center", vertical="center")
-            cell_c.border = BORDER
-            cell_c.comment = _make_comment("Aus Kontoauszug zugeordnet – bitte prüfen!")
-            updated += 1
+        if not _cell_is_writable(cell_c):
+            # C belegt/Formel → weder Datum noch Hilfsspalten anfassen
+            continue
+        cell_c.value = m["date"]
+        cell_c.number_format = DATE_FORMAT
+        _style_payment_cell(
+            cell_c, COLOR_MATCH_OK,
+            "Aus Kontoauszug zugeordnet – bitte prüfen!",
+        )
+        updated += 1
         _set_text(row, m.get("text") or "", COLOR_MATCH_OK)
         _set_status(row, STATUS_FOUND, COLOR_MATCH_OK)
 
@@ -797,12 +1286,94 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
                 f"{(c.get('partner') or '')[:40]}"
             )
         comment = "Mehrdeutig:\n" + "\n".join(lines) if lines else "Mehrere Treffer"
+        _mark_empty_c(row, COLOR_MATCH_AMBIG, comment)
         _set_status(row, STATUS_AMBIGUOUS, COLOR_MATCH_AMBIG, comment)
 
     for u in match_result.get("unmatched", []):
         row = u["row"]
+        _mark_empty_c(row, COLOR_MATCH_MISS, "Nicht im Kontoauszug gefunden")
         _set_status(row, STATUS_NOT_FOUND, COLOR_MATCH_MISS)
 
-    # Keine Zeilen-Ref-Aenderung an Tabellen (nur Spalten wurden ggf. schon erweitert)
+    for n in match_result.get("no_amount", []):
+        row = n["row"]
+        _mark_empty_c(
+            row, COLOR_MATCH_NO_AMT,
+            "Kein Rechnungsbetrag (Spalte H) – Matching nicht möglich",
+        )
+        _set_status(row, STATUS_NO_AMOUNT, COLOR_MATCH_NO_AMT)
+
     wb.save(excel_path)
     return updated
+
+
+def prepare_stb_export(excel_path) -> dict:
+    """
+    STB-Export-Modus (Issue #34): behält gefüllte Zahlungsdaten,
+    entfernt Match-Farben/Kommentare und leert die Hilfsspalten Match-Status
+    (und Buchungstext-Füllfarbe). Spalte Match-Status wird ausgeblendet.
+    """
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
+
+    wb = openpyxl.load_workbook(excel_path)
+    ws = _get_invoice_sheet(wb)
+
+    headers = {
+        (ws.cell(row=4, column=c).value or "").strip(): c
+        for c in range(1, ws.max_column + 1)
+        if ws.cell(row=4, column=c).value
+    }
+    col_text = headers.get(COLUMN_BOOKING_TEXT[0])
+    col_status = headers.get(COLUMN_MATCH_STATUS[0])
+
+    cleared_c = 0
+    cleared_status = 0
+    cleared_text = 0
+    cleared_beleg_auto = 0
+
+    for row in range(5, ws.max_row + 1):
+        cell_a = ws.cell(row=row, column=1)
+        if cell_a.value in (None, ""):
+            continue
+        # Auto-Beleg-Markierung entfernen (Nummer bleibt)
+        cmt = cell_a.comment
+        if cmt and BELEG_AUTO_COMMENT in (cmt.text or ""):
+            _clear_cell_fill_comment(cell_a)
+            cleared_beleg_auto += 1
+
+        cell_c = ws.cell(row=row, column=3)
+        if not _is_formula_cell(cell_c):
+            had_fill = cell_c.fill and cell_c.fill.fill_type is not None
+            had_comment = cell_c.comment is not None
+            _clear_cell_fill_comment(cell_c)
+            if had_fill or had_comment:
+                cleared_c += 1
+
+        if col_status:
+            cell_s = ws.cell(row=row, column=col_status)
+            if not _is_formula_cell(cell_s):
+                if cell_s.value not in (None, "") or (
+                    cell_s.fill and cell_s.fill.fill_type
+                ) or cell_s.comment:
+                    cell_s.value = None
+                    _clear_cell_fill_comment(cell_s)
+                    cleared_status += 1
+
+        if col_text:
+            cell_t = ws.cell(row=row, column=col_text)
+            if not _is_formula_cell(cell_t):
+                if cell_t.fill and cell_t.fill.fill_type:
+                    _clear_cell_fill_comment(cell_t)
+                    cleared_text += 1
+
+    if col_status:
+        ws.column_dimensions[get_column_letter(col_status)].hidden = True
+
+    wb.save(excel_path)
+    return {
+        "cleared_payment_styles": cleared_c,
+        "cleared_status": cleared_status,
+        "cleared_text_styles": cleared_text,
+        "cleared_beleg_auto_styles": cleared_beleg_auto,
+        "status_column_hidden": bool(col_status),
+    }

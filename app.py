@@ -11,7 +11,9 @@ from flask import Flask, render_template, request, jsonify, send_file
 
 from excel_export import create_excel, update_excel_with_ocr, \
                          append_to_excel, get_existing_doc_ids, \
-                         read_invoices_for_matching, update_excel_with_bank_matches
+                         read_invoices_for_matching, update_excel_with_bank_matches, \
+                         prepare_stb_export, collect_missing_beleg_issues, \
+                         plan_auto_beleg_numbers, apply_auto_beleg_numbers
 from pdf_export import download_pdfs
 from llm_extract import extract_from_ocr, check_ollama_available
 from bank_csv import parse_bank_csv, csv_preview
@@ -258,12 +260,24 @@ def enrich_documents_with_correspondents(documents, correspondents):
 
 # ── Stufe 0: Nur Excel (Issue #1) ─────────────────────────────────────
 def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="created",
-               document_type_ids=None, subfolder: str = ""):
-    """Erstellt nur die Excel-Datei – kein PDF-Download, kein OCR."""
+               document_type_ids=None, subfolder: str = "", append_mode: bool = False):
+    """Erstellt nur die Excel-Datei – kein PDF-Download, kein OCR.
+    Bestehende Excel-Dateien werden nie überschrieben – nur Anhängen."""
     global job_status
     try:
         _job_status_reset("stage0")
-        _log(f"Nur Excel – gestartet: {date_from} bis {date_to}")
+        export_folder = os.path.join(OUTPUT_DIR, year_label)
+        _assert_output_path(export_folder)
+        os.makedirs(export_folder, exist_ok=True)
+        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
+        excel_path     = os.path.join(export_folder, excel_filename)
+
+        # Harte Regel: existierende Excel → immer Append (manuelle Arbeit schützen)
+        if os.path.exists(excel_path):
+            append_mode = True
+
+        mode_label = "Nachtrag (nur Excel)" if append_mode else "Nur Excel"
+        _log(f"{mode_label} – gestartet: {date_from} bis {date_to}")
         if tag_names:
             _log(f"Tags: {', '.join(tag_names)}")
         _log(f"Datumsfeld: {'Scan-Datum' if date_field == 'added' else 'Belegdatum'}")
@@ -287,15 +301,27 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
                     "error": "Keine Dokumente im gewählten Zeitraum/Tag gefunden."})
             return
 
-        with job_lock:
-            job_status["doc_count"] = len(docs)
-            job_status["s0_total"] = len(docs)
-            job_status["s0_start_time"] = _time.monotonic()
+        if append_mode and os.path.exists(excel_path):
+            existing_ids = get_existing_doc_ids(excel_path)
+            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden – Datei bleibt erhalten.")
+            new_docs = [
+                d for d in docs
+                if str(d.get("archive_serial_number") or d.get("id")) not in existing_ids
+            ]
+            _log(f"{len(new_docs)} neue Belege werden angehängt.")
+            if not new_docs:
+                with job_lock:
+                    job_status.update({"done": True, "running": False,
+                        "error": "Keine neuen Dokumente – bestehende Excel unverändert belassen."})
+                return
+            docs_to_process = new_docs
+        else:
+            docs_to_process = docs
 
-        export_folder = os.path.join(OUTPUT_DIR, year_label)
-        _assert_output_path(export_folder)
-        os.makedirs(export_folder, exist_ok=True)
-        _log(f"Ausgabeordner: {export_folder}")
+        with job_lock:
+            job_status["doc_count"] = len(docs_to_process)
+            job_status["s0_total"] = len(docs_to_process)
+            job_status["s0_start_time"] = _time.monotonic()
 
         def _s0_progress(idx, total, title):
             with job_lock:
@@ -303,19 +329,30 @@ def run_stage0(date_from, date_to, tag_ids, tag_names, year_label, date_field="c
                 job_status["s0_current_title"] = title or ""
                 job_status["s0_last_doc_time"] = _time.monotonic()
 
-        _log("Erstelle Excel-Datei…")
-        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
-        excel_path     = os.path.join(export_folder, excel_filename)
-        create_excel(docs, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH,
-                      subfolder=subfolder, hyperlink_mode=HYPERLINK_MODE,
-                      include_text_path=INCLUDE_TEXT_PATH,
-                      progress_fn=_s0_progress)
-        _log(f"Excel gespeichert: {excel_filename}")
+        _log(f"Ausgabeordner: {export_folder}")
+        if append_mode and os.path.exists(excel_path):
+            _log("Hänge neue Zeilen ans bestehende Excel an (kein Überschreiben)…")
+            added = append_to_excel(
+                docs_to_process, {}, excel_path, year_label,
+                unc_base=WINDOWS_UNC_PATH, subfolder=subfolder,
+                hyperlink_mode=HYPERLINK_MODE,
+                include_text_path=INCLUDE_TEXT_PATH,
+            )
+            _log(f"Excel ergänzt: {added} neue Zeile(n). Manuelle Einträge unverändert.")
+        else:
+            _log("Erstelle Excel-Datei…")
+            create_excel(docs_to_process, {}, excel_path, year_label, unc_base=WINDOWS_UNC_PATH,
+                          subfolder=subfolder, hyperlink_mode=HYPERLINK_MODE,
+                          include_text_path=INCLUDE_TEXT_PATH,
+                          progress_fn=_s0_progress)
+            _log(f"Excel gespeichert: {excel_filename}")
 
         with job_lock:
             job_status.update({
                 "done": True, "running": False, "excel_path": excel_path,
-                "log": job_status["log"] + [f"✓ Excel abgeschlossen. {len(docs)} Belege exportiert."],
+                "log": job_status["log"] + [
+                    f"✓ {mode_label} abgeschlossen. {len(docs_to_process)} Belege."
+                ],
             })
 
     except Exception as e:
@@ -333,6 +370,13 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
     global job_status
     try:
         _job_status_reset("stage1")
+        export_folder  = os.path.join(OUTPUT_DIR, year_label)
+        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
+        excel_path     = os.path.join(export_folder, excel_filename)
+        # Harte Regel: existierende Excel → immer Append
+        if os.path.exists(excel_path):
+            append_mode = True
+
         mode_label = "Nachtrag" if append_mode else "Stufe 1"
         _log(f"{mode_label} gestartet: {date_from} bis {date_to}")
         if tag_names:
@@ -356,14 +400,11 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
                     "error": "Keine Dokumente im gewählten Zeitraum/Tag gefunden."})
             return
 
-        export_folder  = os.path.join(OUTPUT_DIR, year_label)
         # Subfolder: <year>/<subfolder>/Belege/ wenn gesetzt, sonst <year>/Belege/
         if subfolder:
             pdf_folder = os.path.join(export_folder, subfolder, "Belege")
         else:
             pdf_folder = os.path.join(export_folder, "Belege")
-        excel_filename = f"Rechnungsaufstellung_{year_label}.xlsx"
-        excel_path     = os.path.join(export_folder, excel_filename)
         _assert_output_path(export_folder)
         _assert_output_path(pdf_folder)
         os.makedirs(pdf_folder, exist_ok=True)
@@ -372,7 +413,7 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         # Append-Modus: nur wirklich neue Dokumente verarbeiten
         if append_mode and os.path.exists(excel_path):
             existing_ids = get_existing_doc_ids(excel_path)
-            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden.")
+            _log(f"{len(existing_ids)} Belege bereits im Excel vorhanden – Datei bleibt erhalten.")
             new_docs = [
                 d for d in docs
                 if str(d.get("archive_serial_number") or d.get("id")) not in existing_ids
@@ -405,12 +446,12 @@ def run_stage1(date_from, date_to, tag_ids, tag_names, year_label,
         )
 
         if append_mode and os.path.exists(excel_path):
-            _log("Hänge neue Zeilen ans Excel an…")
+            _log("Hänge neue Zeilen ans Excel an (kein Überschreiben)…")
             added = append_to_excel(docs_to_process, pdf_map, excel_path, year_label,
                                     unc_base=WINDOWS_UNC_PATH, subfolder=subfolder,
                                     hyperlink_mode=HYPERLINK_MODE,
                                     include_text_path=INCLUDE_TEXT_PATH)
-            _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt.")
+            _log(f"Excel ergänzt: {added} neue Zeile(n) hinzugefügt. Manuelle Einträge unverändert.")
         else:
             _log("Erstelle Excel-Datei…")
             create_excel(docs_to_process, pdf_map, excel_path, year_label,
@@ -663,7 +704,8 @@ def api_start():
         thread = threading.Thread(
             target=run_stage0,
             args=(date_from, date_to, tag_ids, tag_names, year_label, date_field),
-            kwargs={"document_type_ids": document_type_ids, "subfolder": subfolder},
+            kwargs={"document_type_ids": document_type_ids, "subfolder": subfolder,
+                    "append_mode": append_mode},
             daemon=True,
         )
     elif mode == "stage2":
@@ -1003,11 +1045,20 @@ def _serialize_match_result(result: dict) -> dict:
             out["re_dat"] = d.isoformat()
         return out
 
+    stats = dict(result.get("stats") or {})
+    missing = result.get("missing_beleg_nr") or []
+    stats.setdefault("ohne_beleg_nr", len(missing))
+    stats.setdefault("beleg_auto", len(missing))
+
     return {
         "matches": [_ser_match(m) for m in result.get("matches", [])],
         "ambiguous": [_ser_inv(a) for a in result.get("ambiguous", [])],
         "unmatched": [_ser_inv(u) for u in result.get("unmatched", [])],
-        "stats": result.get("stats", {}),
+        "no_amount": [_ser_inv(n) for n in result.get("no_amount", [])],
+        "missing_beleg_nr": [_ser_inv(x) for x in missing],
+        "beleg_auto_assigned": [_ser_inv(x) for x in missing],
+        "data_issues": [_ser_inv(x) for x in missing],
+        "stats": stats,
     }
 
 
@@ -1061,6 +1112,9 @@ def api_bank_csv_match():
 
     csv_rel_path | file | upload_key
     excel_rel_path | excel_file | year_label (Fallback)
+
+    Zeilen ohne Beleg-Nr. werden gematcht. Beim Schreiben vergibt die App
+    fortlaufende Nummern (max+1…) und markiert Spalte A gelb „bitte prüfen“.
     """
     if request.content_type and "multipart/form-data" in (request.content_type or ""):
         data = request.form.to_dict()
@@ -1083,10 +1137,25 @@ def api_bank_csv_match():
             csv_path, debits_only=debits_only, only_relevant=only_relevant
         )
         invoices = read_invoices_for_matching(excel_path)
+        planned_beleg = plan_auto_beleg_numbers(excel_path)
+        missing_beleg = collect_missing_beleg_issues(invoices, planned_beleg)
         result = match_invoices_to_bank(invoices, bank_rows)
+        result["missing_beleg_nr"] = missing_beleg
+        if result.get("stats") is not None:
+            result["stats"]["ohne_beleg_nr"] = len(missing_beleg)
+            result["stats"]["beleg_auto"] = len(planned_beleg)
 
         excel_updated = 0
+        beleg_assigned = 0
         if not dry_run:
+            applied = apply_auto_beleg_numbers(excel_path, planned_beleg)
+            beleg_assigned = len(applied)
+            # Nummern in der Response spiegeln
+            for a in applied:
+                for m in missing_beleg:
+                    if m.get("row") == a.get("row"):
+                        m["beleg_nr"] = a.get("beleg_nr")
+                        m["proposed_beleg_nr"] = a.get("beleg_nr")
             excel_updated = update_excel_with_bank_matches(excel_path, result)
             with job_lock:
                 job_status["excel_path"] = excel_path
@@ -1098,9 +1167,41 @@ def api_bank_csv_match():
         payload["csv_rel_path"] = csv_rel
         payload["year_label"] = year_label
         payload["excel_updated"] = excel_updated
+        payload["beleg_assigned"] = beleg_assigned
         payload["bank_rows_total"] = len(bank_rows)
         payload["bank_rows_selected"] = sum(1 for b in bank_rows if b.get("selected"))
         return jsonify(payload)
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except (ValueError, FileNotFoundError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/bank-csv/stb-export", methods=["POST"])
+def api_bank_csv_stb_export():
+    """
+    STB-Export-Modus: Farben/Kommentare entfernen, Match-Status leeren + ausblenden,
+    gefüllte Zahlungsdaten behalten (Issue #34).
+    Body: excel_rel_path | excel_file | year_label
+    """
+    if request.content_type and "multipart/form-data" in (request.content_type or ""):
+        data = request.form.to_dict()
+        f_excel = request.files.get("excel_file")
+    else:
+        data = request.get_json(force=True, silent=True) or {}
+        f_excel = None
+    try:
+        excel_path, excel_rel, year_label = _resolve_excel_path(data, f_excel)
+        stats = prepare_stb_export(excel_path)
+        return jsonify({
+            "ok": True,
+            "excel_path": excel_path,
+            "excel_rel_path": excel_rel,
+            "year_label": year_label,
+            **stats,
+        })
     except PermissionError as e:
         return jsonify({"error": str(e)}), 403
     except (ValueError, FileNotFoundError) as e:

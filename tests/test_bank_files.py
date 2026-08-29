@@ -123,3 +123,63 @@ class TestResolvePaths:
         data = json.loads(res.data)
         assert data["excel_rel_path"] == "2025/Mein_Export.xlsx"
         assert data["stats"]["gefunden"] >= 1
+
+    def test_match_auto_assigns_beleg_nr_on_apply(self, app_with_output):
+        client, tmp_path, _ = app_with_output
+        import openpyxl
+        from excel_export import create_excel, COLOR_OCR_BG, BELEG_AUTO_COMMENT
+        from datetime import date
+
+        year = tmp_path / "2025"
+        year.mkdir()
+        excel = year / "ohne_beleg.xlsx"
+        docs = [{
+            "id": 1, "title": "Software", "created": "2025-03-10",
+            "archive_serial_number": 7, "correspondent_name": "ACME GmbH",
+        }]
+        create_excel(docs, {}, str(excel), "2025")
+        wb = openpyxl.load_workbook(str(excel))
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 42.50
+        ws.cell(row=6, column=1).value = None
+        ws.cell(row=6, column=2).value = date(2025, 3, 15)
+        ws.cell(row=6, column=5).value = "OhneBeleg AG"
+        ws.cell(row=6, column=8).value = 10.0
+        wb.save(str(excel))
+
+        fixture = os.path.join(
+            os.path.dirname(__file__), "fixtures", "at_giro_sample.csv"
+        )
+        csv_path = tmp_path / "konto.csv"
+        csv_path.write_text(open(fixture, encoding="utf-8").read(), encoding="utf-8")
+
+        dry = client.post(
+            "/api/bank-csv/match",
+            json={
+                "excel_rel_path": "2025/ohne_beleg.xlsx",
+                "csv_rel_path": "konto.csv",
+                "dry_run": True,
+            },
+        )
+        assert dry.status_code == 200
+        d = json.loads(dry.data)
+        assert d["stats"]["beleg_auto"] == 1
+        assert d["missing_beleg_nr"][0]["proposed_beleg_nr"] == 8
+
+        applied = client.post(
+            "/api/bank-csv/match",
+            json={
+                "excel_rel_path": "2025/ohne_beleg.xlsx",
+                "csv_rel_path": "konto.csv",
+                "dry_run": False,
+            },
+        )
+        assert applied.status_code == 200, applied.data
+        body = json.loads(applied.data)
+        assert body["beleg_assigned"] == 1
+
+        wb2 = openpyxl.load_workbook(str(excel))
+        cell = wb2["Rechnungsaufstellung"].cell(row=6, column=1)
+        assert cell.value == 8
+        assert cell.fill.fgColor.rgb[-6:].upper() == COLOR_OCR_BG
+        assert BELEG_AUTO_COMMENT in (cell.comment.text or "")

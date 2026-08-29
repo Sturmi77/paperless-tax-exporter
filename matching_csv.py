@@ -1,10 +1,12 @@
 """
-Matching Kontoauszug-Buchungen ↔ Rechnungszeilen (Issue #25).
+Matching Kontoauszug-Buchungen ↔ Rechnungszeilen (Issue #25 / #34).
 
-Regeln:
+Härte-Regeln:
   1. Betrag (± Toleranz)
   2. Datum-Fenster (Rechnungsdatum … + max_days)
-  3. Fuzzy-Text (Absender / Beschreibung ↔ Partner / Buchungstext)
+  3. Fuzzy-Text mit Mindestscore (kein Blind-Match nur über Betrag)
+  4. 1:1-Lock: jede Bankzeile höchstens einer Rechnung
+  5. ≥2 Kandidaten mit Score ≥ min_score → immer mehrdeutig
 
 Nur Rechnungszeilen mit leerem Zahlungsdatum (Spalte C).
 """
@@ -17,9 +19,11 @@ from difflib import SequenceMatcher
 from typing import Optional
 
 
+STATUS_OPEN = "offen"
 STATUS_FOUND = "gefunden"
 STATUS_AMBIGUOUS = "mehrdeutig"
 STATUS_NOT_FOUND = "nicht gefunden"
+STATUS_NO_AMOUNT = "kein Betrag"
 
 
 def _norm_text(s: str) -> str:
@@ -38,7 +42,6 @@ def text_score(a: str, b: str) -> float:
         return 0.0
     if na in nb or nb in na:
         return 0.95
-    # Token-Overlap
     ta, tb = set(na.split()), set(nb.split())
     if ta and tb:
         overlap = len(ta & tb) / max(len(ta), len(tb))
@@ -82,11 +85,21 @@ def score_candidate(invoice: dict, bank: dict) -> float:
     ]))
     parts.append(text_score(inv_text, bank_text))
 
-    # Partner vs Absender extra gewichten
     if invoice.get("absender") and bank.get("partner"):
         parts.append(text_score(invoice["absender"], bank["partner"]))
 
     return sum(parts) / len(parts) if parts else 0.0
+
+
+def _candidate_payload(inv: dict, bank: dict, score: float) -> dict:
+    return {
+        "bank_row_id": bank["row_id"],
+        "date": bank["date"].isoformat() if bank.get("date") else None,
+        "amount": bank.get("amount"),
+        "partner": bank.get("partner"),
+        "text": bank.get("text"),
+        "score": round(score, 3),
+    }
 
 
 def match_invoices_to_bank(
@@ -97,7 +110,6 @@ def match_invoices_to_bank(
     amount_tol_pct: float = 0.01,
     max_days: int = 60,
     min_score: float = 0.25,
-    ambiguous_gap: float = 0.08,
 ) -> dict:
     """
     invoices: [{row, beleg_nr, re_dat, absender, beschreibung, betrag}, ...]
@@ -106,10 +118,8 @@ def match_invoices_to_bank(
 
     Rückgabe:
       {
-        matches: [{invoice_row, bank_row_id, status, score, date, text, partner, amount}],
-        ambiguous: [...],
-        unmatched: [{invoice_row, beleg_nr, ...}],
-        stats: {...}
+        matches, ambiguous, unmatched, no_amount,
+        stats, used_bank_ids
       }
     """
     candidates_pool = [b for b in bank_rows if b.get("selected")]
@@ -118,11 +128,12 @@ def match_invoices_to_bank(
     matches = []
     ambiguous = []
     unmatched = []
+    no_amount = []
 
     for inv in invoices:
         betrag = inv.get("betrag")
         if betrag is None:
-            unmatched.append({**inv, "status": STATUS_NOT_FOUND, "reason": "kein Betrag"})
+            no_amount.append({**inv, "status": STATUS_NO_AMOUNT, "reason": "kein Betrag"})
             continue
 
         scored = []
@@ -134,78 +145,43 @@ def match_invoices_to_bank(
             if not date_in_window(inv.get("re_dat"), b.get("date"), max_days):
                 continue
             sc = score_candidate(inv, b)
+            if sc < min_score:
+                continue
             scored.append((sc, b))
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        if not scored or scored[0][0] < min_score:
-            # Betrags-Treffer ohne Text? Wenn genau ein Betrags+Datum-Treffer → trotzdem gefunden
-            amount_only = []
-            for b in candidates_pool:
-                if b["row_id"] in used_bank_ids:
-                    continue
-                if not amounts_match(betrag, b.get("amount"), amount_tol_abs, amount_tol_pct):
-                    continue
-                if not date_in_window(inv.get("re_dat"), b.get("date"), max_days):
-                    continue
-                amount_only.append(b)
-            if len(amount_only) == 1:
-                b = amount_only[0]
-                used_bank_ids.add(b["row_id"])
-                matches.append(_result(inv, b, STATUS_FOUND, 0.5))
-            elif len(amount_only) > 1:
-                ambiguous.append({
-                    **inv,
-                    "status": STATUS_AMBIGUOUS,
-                    "candidates": [
-                        {
-                            "bank_row_id": x["row_id"],
-                            "date": x["date"].isoformat() if x.get("date") else None,
-                            "amount": x.get("amount"),
-                            "partner": x.get("partner"),
-                            "text": x.get("text"),
-                            "score": round(score_candidate(inv, x), 3),
-                        }
-                        for x in amount_only[:5]
-                    ],
-                })
-            else:
-                unmatched.append({**inv, "status": STATUS_NOT_FOUND})
+        if not scored:
+            unmatched.append({**inv, "status": STATUS_NOT_FOUND})
             continue
 
-        best_score, best = scored[0]
-        second = scored[1][0] if len(scored) > 1 else 0.0
-
-        if len(scored) > 1 and (best_score - second) < ambiguous_gap and second >= min_score:
+        # Volle Härte: ≥2 treffende Kandidaten → immer mehrdeutig (kein Gap-Override)
+        if len(scored) >= 2:
             ambiguous.append({
                 **inv,
                 "status": STATUS_AMBIGUOUS,
                 "candidates": [
-                    {
-                        "bank_row_id": b["row_id"],
-                        "date": b["date"].isoformat() if b.get("date") else None,
-                        "amount": b.get("amount"),
-                        "partner": b.get("partner"),
-                        "text": b.get("text"),
-                        "score": round(sc, 3),
-                    }
-                    for sc, b in scored[:5]
+                    _candidate_payload(inv, b, sc) for sc, b in scored[:5]
                 ],
             })
-        else:
-            used_bank_ids.add(best["row_id"])
-            matches.append(_result(inv, best, STATUS_FOUND, best_score))
+            continue
+
+        best_score, best = scored[0]
+        used_bank_ids.add(best["row_id"])
+        matches.append(_result(inv, best, STATUS_FOUND, best_score))
 
     return {
         "matches": matches,
         "ambiguous": ambiguous,
         "unmatched": unmatched,
+        "no_amount": no_amount,
         "stats": {
             "invoices": len(invoices),
             "bank_selected": len(candidates_pool),
             "gefunden": len(matches),
             "mehrdeutig": len(ambiguous),
             "nicht_gefunden": len(unmatched),
+            "kein_betrag": len(no_amount),
             "bank_used": len(used_bank_ids),
         },
         "used_bank_ids": used_bank_ids,

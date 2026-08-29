@@ -671,48 +671,82 @@ function formatDuration(seconds) {
   return rm > 0 ? `${h} Std. ${rm} Min.` : `${h} Std.`;
 }
 
-// --- Issue #4: Überschreib-Prüfung ------------------------------------
+// --- Issue #4: Überschreib-Prüfung – Excel wird nie zerstört ----------
 async function checkExistsAndConfirm(yearLabel, mode) {
-  // Nur bei Stufe 1 oder both relevant (nicht stage0, nicht stage2)
-  if (mode === "stage2" || mode === "stage0") return true;
+  // Stufe 2 ändert nur Zellen, kein Neu-Anlegen
+  if (mode === "stage2") return true;
 
   let data;
   try {
     const res = await fetch(`/api/check-exists?year=${encodeURIComponent(yearLabel)}`);
     data = await res.json();
   } catch {
-    return true; // Bei Fehler einfach fortfahren
+    return true; // Bei Fehler einfach fortfahren (Server schützt Excel zusätzlich)
   }
 
-  if (!data.excel_exists && !data.pdfs_exist) return true; // nichts vorhanden
+  if (!data.excel_exists && !data.pdfs_exist) return true;
 
-  // Modal befüllen und anzeigen
   let details = "";
-  if (data.excel_exists) details += `<li>Excel-Datei: <strong>Rechnungsaufstellung_${yearLabel}.xlsx</strong></li>`;
-  if (data.pdfs_exist)   details += `<li>PDF-Ordner: <strong>Belege/</strong> (${data.pdf_count} Dateien)</li>`;
+  if (data.excel_exists) {
+    details += `<li>Excel-Datei: <strong>Rechnungsaufstellung_${yearLabel}.xlsx</strong> `
+      + `<em>(wird erhalten – nur Anhängen möglich)</em></li>`;
+  }
+  if (data.pdfs_exist) {
+    details += `<li>PDF-Ordner: <strong>Belege/</strong> (${data.pdf_count} Dateien)</li>`;
+  }
 
   $("overwrite-details").innerHTML = details;
+  const warn = document.querySelector("#overwrite-modal .modal-text-warn");
+  const btnOverwrite = $("btn-overwrite-confirm");
+  const btnAppend = $("btn-overwrite-append");
+  const title = $("overwrite-modal-title");
+
+  if (data.excel_exists) {
+    // Excel mit manuellem Aufwand: kein Überschreiben anbieten
+    if (title) title.textContent = "Excel bereits vorhanden";
+    if (warn) {
+      warn.textContent = "Die bestehende Excel-Datei wird nicht überschrieben "
+        + "(Zahlungsdaten, Matching, manuelle Einträge bleiben erhalten). "
+        + "Neue Belege können angehängt werden.";
+    }
+    if (btnOverwrite) btnOverwrite.classList.add("hidden");
+    if (btnAppend) btnAppend.classList.remove("hidden");
+  } else {
+    // Nur PDFs – Excel neu anlegbar
+    if (title) title.textContent = "Dateien bereits vorhanden";
+    if (warn) {
+      warn.textContent = "PDF-Ordner existiert bereits. Fortfahren lädt ggf. erneut herunter "
+        + "und legt die Excel neu an.";
+    }
+    if (btnOverwrite) {
+      btnOverwrite.classList.remove("hidden");
+      btnOverwrite.textContent = "Fortfahren";
+    }
+    if (btnAppend) btnAppend.classList.add("hidden");
+  }
+
   const modal = $("overwrite-modal");
   modal.classList.remove("hidden");
-
-  // Fokus auf ersten Button setzen (A1: Focus Management)
-  setTimeout(() => $("btn-overwrite-cancel").focus(), 50);
+  setTimeout(() => {
+    const focusBtn = data.excel_exists ? $("btn-overwrite-append") : $("btn-overwrite-cancel");
+    if (focusBtn) focusBtn.focus();
+  }, 50);
 
   return new Promise(resolve => {
     function closeModal(result) {
       modal.classList.add("hidden");
       document.removeEventListener("keydown", escHandler);
       modal.removeEventListener("click", backdropHandler);
+      // Excel existiert → „Fortfahren“/true wird zu Append erzwungen
+      if (data.excel_exists && result === true) result = "append";
       resolve(result);
     }
 
-    // M2: Escape-Key schließt Modal
     function escHandler(e) {
       if (e.key === "Escape") closeModal(false);
     }
     document.addEventListener("keydown", escHandler);
 
-    // M3: Klick auf Backdrop schließt Modal
     function backdropHandler(e) {
       if (e.target === modal) closeModal(false);
     }
@@ -756,7 +790,7 @@ async function startExport(mode) {
   const appendMode = confirmed === "append";
 
   const titles = {
-    stage0:  "Nur Excel wird erstellt…",
+    stage0:  appendMode ? "Neue Belege ans Excel anhängen…" : "Nur Excel wird erstellt…",
     stage1:  appendMode ? "Neue Belege werden hinzugefügt…" : "PDFs & Excel wird erstellt…",
     stage2:  "OCR-Analyse läuft…",
     both:    appendMode ? "Neue Belege + OCR-Analyse läuft…" : "Vollständiger Export läuft…",
@@ -1047,24 +1081,45 @@ function resetUI() {
   enableButtons();
 }
 
-// --- Issue #25 / #28 / #29: Kontoauszug-Matching ----------------------
+// --- Issue #25 / #28 / #29 / #34: Kontoauszug-Matching ----------------
 let bankUploadKey = null;
 let bankCsvRelPath = null;
 let bankExcelRelPath = null;
+let bankDryRunOk = false;
+let bankLastPreviewStats = null;
+
+function setBankApplyEnabled(enabled) {
+  const ba = $("btn-bank-apply");
+  if (!ba) return;
+  ba.disabled = !enabled;
+  ba.title = enabled
+    ? "Vorschau geprueft – Zuordnung ins Excel schreiben"
+    : "Zuerst Vorschau Matching ausfuehren";
+}
+
+function invalidateBankDryRun() {
+  bankDryRunOk = false;
+  bankLastPreviewStats = null;
+  setBankApplyEnabled(false);
+}
 
 function initBankMatchUI() {
   const bp = $("btn-bank-preview");
   const bd = $("btn-bank-dryrun");
   const ba = $("btn-bank-apply");
+  const stb = $("btn-bank-stb-export");
   if (bp) bp.addEventListener("click", () => bankCsvPreview());
   if (bd) bd.addEventListener("click", () => bankCsvMatch(true));
   if (ba) ba.addEventListener("click", () => bankCsvMatch(false));
+  if (stb) stb.addEventListener("click", () => bankStbExport());
+  setBankApplyEnabled(false);
 
   const excelSel = $("bank-excel-select");
   const csvSel = $("bank-csv-select");
   if (excelSel) {
     excelSel.addEventListener("change", function () {
       bankExcelRelPath = excelSel.value || null;
+      invalidateBankDryRun();
     });
   }
   if (csvSel) {
@@ -1073,29 +1128,32 @@ function initBankMatchUI() {
       bankUploadKey = null;
       const fn = $("bank-csv-filename");
       if (fn && bankCsvRelPath) fn.textContent = bankCsvRelPath;
+      invalidateBankDryRun();
     });
   }
+
+  const debits = $("bank-debits-only");
+  const relevant = $("bank-only-relevant");
+  if (debits) debits.addEventListener("change", invalidateBankDryRun);
+  if (relevant) relevant.addEventListener("change", invalidateBankDryRun);
 
   const browse = $("btn-bank-csv-browse");
   const fileInput = $("bank-csv-file");
   if (browse && fileInput) {
-    browse.addEventListener("click", function () { fileInput.click(); });
+    browse.addEventListener("click", () => fileInput.click());
     fileInput.addEventListener("change", function () {
-      const f = fileInput.files && fileInput.files[0];
       const fn = $("bank-csv-filename");
-      if (fn) fn.textContent = f ? f.name : "Keine Datei";
-      if (f) {
-        bankCsvRelPath = null;
-        if (csvSel) csvSel.value = "";
-      }
+      if (fn) fn.textContent = (fileInput.files && fileInput.files[0])
+        ? fileInput.files[0].name : "Keine Datei";
+      bankUploadKey = null;
+      invalidateBankDryRun();
     });
   }
 
-  const rx = $("btn-bank-excel-refresh");
+  const re = $("btn-bank-excel-refresh");
   const rc = $("btn-bank-csv-refresh");
-  if (rx) rx.addEventListener("click", () => loadBankFileList("xlsx"));
+  if (re) re.addEventListener("click", () => loadBankFileList("xlsx"));
   if (rc) rc.addEventListener("click", () => loadBankFileList("csv"));
-
   loadBankFileList("xlsx");
   loadBankFileList("csv");
 }
@@ -1146,34 +1204,67 @@ function renderBankMatchResult(data) {
   if (!box) return;
   const s = data.stats || {};
   let html = '<div class="bank-stats">';
-  html += "<strong>Vorschau:</strong> " + (data.dry_run ? "Dry-Run" : "Geschrieben") + " · ";
-  html += "Rechnungen: " + (s.invoices || 0) + " · ";
-  html += "gefunden: " + (s.gefunden || 0) + " · ";
-  html += "mehrdeutig: " + (s.mehrdeutig || 0) + " · ";
-  html += "nicht gefunden: " + (s.nicht_gefunden || 0);
+  html += "<strong>" + (data.dry_run ? "Vorschau (noch nicht geschrieben)" : "Geschrieben") + "</strong> · ";
+  html += "offen: " + (s.invoices || 0) + " · ";
+  html += '<span class="bank-pill bank-pill-ok">gefunden ' + (s.gefunden || 0) + "</span> · ";
+  html += '<span class="bank-pill bank-pill-ambig">mehrdeutig ' + (s.mehrdeutig || 0) + "</span> · ";
+  html += '<span class="bank-pill bank-pill-miss">nicht gefunden ' + (s.nicht_gefunden || 0) + "</span> · ";
+  html += '<span class="bank-pill bank-pill-amt">kein Betrag ' + (s.kein_betrag || 0) + "</span>";
+  if (s.ohne_beleg_nr || s.beleg_auto) {
+    html += ' · <span class="bank-pill bank-pill-warn">Beleg-Nr. auto '
+      + (s.beleg_auto || s.ohne_beleg_nr || 0) + "</span>";
+  }
   html += "</div>";
   if (data.excel_rel_path) {
     html += "<p>Excel: <code>" + data.excel_rel_path + "</code></p>";
   }
-  html += "<p class=\"field-hint\">In Excel nach Spalte <strong>Match-Status</strong> filtern (gefunden / nicht gefunden / mehrdeutig).</p>";
+  html += "<p class=\"field-hint\">Spalte C: gruen=Datum gesetzt, gelb=mehrdeutig, rot=nicht gefunden, grau=kein Betrag. "
+    + "Fehlende Beleg-Nr. (A) werden fortlaufend vergeben und gelb markiert („bitte pruefen“). "
+    + "Vor STB-Abgabe gelb/rot klaeren oder „STB-Export vorbereiten“.</p>";
+  const missing = data.beleg_auto_assigned || data.missing_beleg_nr || data.data_issues || [];
+  if (missing.length) {
+    html += "<details open><summary>Beleg-Nr. automatisch (" + missing.length
+      + ") – gelb = bitte pruefen</summary><ul>";
+    missing.slice(0, 25).forEach(function (u) {
+      const nr = u.beleg_nr != null && u.beleg_nr !== ""
+        ? u.beleg_nr
+        : (u.proposed_beleg_nr != null ? "→ " + u.proposed_beleg_nr : "?");
+      html += "<li>Zeile " + (u.row || "?") + " · Beleg " + nr + " · "
+        + (u.absender || u.beschreibung || "–")
+        + (u.betrag != null ? " · " + u.betrag : "")
+        + "</li>";
+    });
+    html += "</ul></details>";
+  }
   if ((data.matches || []).length) {
     html += "<details open><summary>Gefunden (" + data.matches.length + ")</summary><ul>";
     data.matches.slice(0, 20).forEach(function (m) {
-      html += "<li>Beleg " + (m.beleg_nr || "?") + " → " + (m.date || "") + " · " + (m.text || "").slice(0, 80) + "</li>";
+      html += "<li>" + (m.beleg_nr != null && m.beleg_nr !== "" ? "Beleg " + m.beleg_nr : "Zeile " + (m.invoice_row || "?"))
+        + " → " + (m.date || "") + " · " + (m.text || "").slice(0, 80) + "</li>";
     });
     html += "</ul></details>";
   }
   if ((data.ambiguous || []).length) {
-    html += "<details><summary>Mehrdeutig (" + data.ambiguous.length + ")</summary><ul>";
+    html += "<details open><summary>Mehrdeutig (" + data.ambiguous.length + ")</summary><ul>";
     data.ambiguous.slice(0, 15).forEach(function (a) {
-      html += "<li>Beleg " + (a.beleg_nr || "?") + " · " + (a.candidates || []).length + " Kandidaten</li>";
+      html += "<li>" + (a.beleg_nr != null && a.beleg_nr !== "" ? "Beleg " + a.beleg_nr : "Zeile " + (a.row || "?"))
+        + " · " + (a.candidates || []).length + " Kandidaten</li>";
     });
     html += "</ul></details>";
   }
   if ((data.unmatched || []).length) {
     html += "<details><summary>Nicht gefunden (" + data.unmatched.length + ")</summary><ul>";
     data.unmatched.slice(0, 20).forEach(function (u) {
-      html += "<li>Beleg " + (u.beleg_nr || "?") + " · " + (u.beschreibung || u.absender || "") + "</li>";
+      html += "<li>" + (u.beleg_nr != null && u.beleg_nr !== "" ? "Beleg " + u.beleg_nr : "Zeile " + (u.row || "?"))
+        + " · " + (u.beschreibung || u.absender || "") + "</li>";
+    });
+    html += "</ul></details>";
+  }
+  if ((data.no_amount || []).length) {
+    html += "<details><summary>Kein Betrag (" + data.no_amount.length + ")</summary><ul>";
+    data.no_amount.slice(0, 20).forEach(function (u) {
+      html += "<li>" + (u.beleg_nr != null && u.beleg_nr !== "" ? "Beleg " + u.beleg_nr : "Zeile " + (u.row || "?"))
+        + " · " + (u.beschreibung || u.absender || "") + "</li>";
     });
     html += "</ul></details>";
   }
@@ -1245,7 +1336,24 @@ async function bankCsvMatch(dryRun) {
     return;
   }
   if (!dryRun) {
-    const ok = window.confirm("Zuordnungen ins Excel schreiben und gefilterten Kontoauszug erzeugen?");
+    if (!bankDryRunOk || !bankLastPreviewStats) {
+      bankMatchShowMsg("Bitte zuerst „Vorschau Matching“ ausfuehren und die Zaehler pruefen.", true);
+      return;
+    }
+    const s = bankLastPreviewStats;
+    const autoN = s.beleg_auto || s.ohne_beleg_nr || 0;
+    let msg =
+      "Zuordnung ins Excel schreiben?\n\n" +
+      "gefunden: " + (s.gefunden || 0) + " (C = Datum, gruen)\n" +
+      "mehrdeutig: " + (s.mehrdeutig || 0) + " (C leer, gelb)\n" +
+      "nicht gefunden: " + (s.nicht_gefunden || 0) + " (C leer, rot)\n" +
+      "kein Betrag: " + (s.kein_betrag || 0) + " (C leer, grau)";
+    if (autoN) {
+      msg +=
+        "\n\n" + autoN + " fehlende Beleg-Nr. werden fortlaufend vergeben\n" +
+        "und in Spalte A gelb markiert („bitte pruefen“).";
+    }
+    const ok = window.confirm(msg);
     if (!ok) return;
   }
   try {
@@ -1259,10 +1367,61 @@ async function bankCsvMatch(dryRun) {
     if (data.csv_rel_path) bankCsvRelPath = data.csv_rel_path;
     if (data.excel_rel_path) bankExcelRelPath = data.excel_rel_path;
     renderBankMatchResult(data);
+    if (dryRun) {
+      bankDryRunOk = true;
+      bankLastPreviewStats = data.stats || {};
+      setBankApplyEnabled(true);
+      const autoN = (data.stats && (data.stats.beleg_auto || data.stats.ohne_beleg_nr)) || 0;
+      const warn = autoN
+        ? " " + autoN + " Beleg-Nr. werden beim Schreiben automatisch vergeben (gelb = pruefen)."
+        : "";
+      bankMatchShowMsg(
+        "Vorschau fertig – bitte Zaehler pruefen. Danach „Zuordnung schreiben“ freigeschaltet." + warn,
+        false
+      );
+    } else {
+      invalidateBankDryRun();
+      const belegMsg = data.beleg_assigned
+        ? " Beleg-Nr. vergeben: " + data.beleg_assigned + " (gelb = bitte pruefen)."
+        : "";
+      bankMatchShowMsg(
+        "Geschrieben. Excel-Updates: " + (data.excel_updated || 0) + "." + belegMsg +
+        " Vor STB-Abgabe gelb/rot klaeren oder STB-Export vorbereiten.",
+        false
+      );
+    }
+  } catch (err) {
+    bankMatchShowMsg("Verbindungsfehler: " + err.message, true);
+  }
+}
+
+async function bankStbExport() {
+  bankMatchShowMsg("");
+  const excelRel = ($("bank-excel-select") && $("bank-excel-select").value) || bankExcelRelPath || "";
+  if (!excelRel) {
+    bankMatchShowMsg("Bitte Rechnungs-Excel aus der Liste waehlen.", true);
+    return;
+  }
+  const ok = window.confirm(
+    "STB-Export vorbereiten?\n\n" +
+    "Entfernt Match-Farben und Kommentare an Spalte C,\n" +
+    "leert Match-Status und blendet die Spalte aus.\n" +
+    "Gefuellte Zahlungsdaten bleiben erhalten."
+  );
+  if (!ok) return;
+  try {
+    const fd = new FormData();
+    fd.append("excel_rel_path", excelRel);
+    const res = await fetch("/api/bank-csv/stb-export", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      bankMatchShowMsg(data.error || "STB-Export fehlgeschlagen", true);
+      return;
+    }
     bankMatchShowMsg(
-      dryRun
-        ? "Dry-Run abgeschlossen – noch nichts geschrieben."
-        : ("Geschrieben. Excel-Updates: " + (data.excel_updated || 0)),
+      "STB-Export fertig · C-Styles: " + (data.cleared_payment_styles || 0) +
+      " · Status geleert: " + (data.cleared_status || 0) +
+      (data.status_column_hidden ? " · Match-Status ausgeblendet" : ""),
       false
     );
   } catch (err) {

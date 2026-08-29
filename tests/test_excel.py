@@ -184,6 +184,33 @@ class TestAppendToExcel:
         assert added == 0
 
 
+    def test_append_preserves_wide_table_after_match_cols(self, tmp_path):
+        """Append darf Match-Spalten nicht wieder auf 10 Spalten schrumpfen."""
+        from openpyxl.utils import range_boundaries
+        from excel_export import update_excel_with_bank_matches, _ensure_bank_match_columns
+        import openpyxl
+
+        out = str(tmp_path / "append_wide.xlsx")
+        create_excel(self.INITIAL_DOCS, self.PDF_MAP, out, "2024", unc_base=self.UNC_BASE)
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Rechnungsaufstellung"]
+        _ensure_bank_match_columns(ws)
+        wb.save(out)
+        t1 = [t for t in openpyxl.load_workbook(out)["Rechnungsaufstellung"].tables.values()
+              if t.displayName == "Tabelle1"][0]
+        _c1, _r1, cols_before, rows_before = range_boundaries(t1.ref)
+        assert cols_before > 10
+
+        added = append_to_excel(self.NEW_DOCS, self.PDF_MAP, out, "2024", unc_base=self.UNC_BASE)
+        assert added == 1
+        t1b = [t for t in openpyxl.load_workbook(out)["Rechnungsaufstellung"].tables.values()
+               if t.displayName == "Tabelle1"][0]
+        _a, _b, cols_after, rows_after = range_boundaries(t1b.ref)
+        assert cols_after >= cols_before
+        assert rows_after > rows_before
+        assert len(t1b.tableColumns) == (cols_after - _a + 1)
+
+
 # ---------------------------------------------------------------------------
 # Tests: _build_cell_formula() (Issue #8)
 # ---------------------------------------------------------------------------
@@ -296,3 +323,31 @@ class TestCellFormulaHyperlinks:
         # Kein statischer NAS-Pfad in der Formel
         assert "SynologyDS923" not in val
         wb.close()
+
+class TestCreateExcelNoOverwrite:
+    def test_refuses_existing_file(self, tmp_path):
+        docs = [{
+            "id": 1, "archive_serial_number": "0001", "created": "2024-01-10",
+            "correspondent_name": "A", "title": "R1",
+            "document_type": 1, "document_type_name": "Rechnung",
+        }]
+        out = str(tmp_path / "keep.xlsx")
+        create_excel(docs, {}, out, "2024")
+        with open(out, "rb") as f:
+            before = f.read()
+        import pytest
+        with pytest.raises(FileExistsError):
+            create_excel(docs, {}, out, "2024")
+        with open(out, "rb") as f:
+            assert f.read() == before
+
+    def test_overwrite_flag_allows_replace(self, tmp_path):
+        docs = [{
+            "id": 1, "archive_serial_number": "0001", "created": "2024-01-10",
+            "correspondent_name": "A", "title": "R1",
+            "document_type": 1, "document_type_name": "Rechnung",
+        }]
+        out = str(tmp_path / "force.xlsx")
+        create_excel(docs, {}, out, "2024")
+        create_excel(docs, {}, out, "2024", overwrite=True)
+        assert os.path.exists(out)

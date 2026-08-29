@@ -223,12 +223,12 @@
 
       </section>
 
-      <!-- Issue #25 / #28 / #29: Kontoauszug zuordnen -->
+      <!-- Issue #25 / #28 / #29 / #34: Kontoauszug zuordnen -->
       <section class="card" id="bank-match-card">
         <div class="card-title-row">
           <h2 class="card-title">Kontoauszug zuordnen</h2>
           <span class="card-title-hint">
-            Ergebnis nur in der gewaehlten Rechnungs-Excel (gefunden / nicht gefunden) – keine Zusatzdatei
+            Fuehrend: Zahlungsdatum (Spalte C) farblich – zuerst Vorschau, dann schreiben
           </span>
         </div>
 
@@ -240,7 +240,7 @@
             </select>
             <button type="button" class="btn btn-secondary" id="btn-bank-excel-refresh" title="Liste aktualisieren">Aktualisieren</button>
           </div>
-          <p class="field-hint">Alle .xlsx unter dem Ausgabe-Pfad (auch bearbeitete Dateien)</p>
+          <p class="field-hint">Alle Zeilen mit leerem Zahlungsdatum (C) – nicht nur die gefilterte Excel-Ansicht</p>
         </div>
 
         <div class="field-group">
@@ -278,7 +278,8 @@
         <div class="actions actions-secondary" style="margin-top:12px;">
           <button class="btn btn-secondary" id="btn-bank-preview" type="button">CSV pruefen</button>
           <button class="btn btn-secondary" id="btn-bank-dryrun" type="button">Vorschau Matching</button>
-          <button class="btn btn-primary" id="btn-bank-apply" type="button">Zuordnung schreiben</button>
+          <button class="btn btn-primary" id="btn-bank-apply" type="button" disabled title="Zuerst Vorschau Matching ausfuehren">Zuordnung schreiben</button>
+          <button class="btn btn-secondary" id="btn-bank-stb-export" type="button" title="Farben und Match-Status fuer Steuerberater entfernen">STB-Export vorbereiten</button>
         </div>
 
         <div id="bank-match-msg" class="error-msg hidden" role="alert" style="margin-top:10px;"></div>
@@ -446,7 +447,7 @@
       <h3 class="modal-title" id="overwrite-modal-title">Dateien bereits vorhanden</h3>
       <p class="modal-text">Für diesen Zeitraum existieren bereits exportierte Dateien:</p>
       <ul class="modal-details" id="overwrite-details"></ul>
-      <p class="modal-text modal-text-warn">Beim Überschreiben werden diese Dateien ersetzt – manuelle Einträge (Zahlungsdatum, Kennzahl) gehen verloren.</p>
+      <p class="modal-text modal-text-warn">Bestehende Excel-Dateien werden nicht überschrieben – manuelle Einträge bleiben erhalten.</p>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-overwrite-cancel">Abbrechen</button>
         <button class="btn btn-primary" id="btn-overwrite-append">
@@ -455,7 +456,7 @@
           </svg>
           Nur neue hinzufügen
         </button>
-        <button class="btn btn-danger btn-modal-danger" id="btn-overwrite-confirm">Alles überschreiben</button>
+        <button class="btn btn-danger btn-modal-danger hidden" id="btn-overwrite-confirm">Fortfahren</button>
       </div>
     </div>
   </div>
