@@ -15,7 +15,9 @@ Spalten:
 """
 
 import os
+import re
 from datetime import datetime, date
+from typing import Optional
 import openpyxl
 from openpyxl.styles import (
     Font, PatternFill, Alignment, Border, Side
@@ -887,10 +889,254 @@ def _parse_excel_date(val):
     return None
 
 
+def _cell_as_float(value):
+    """Zahl aus Zelle; Formeln/leer → None (openpyxl data_only ohne Cache)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and value.strip().startswith("="):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cell_is_blank(value) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _beleg_nr_missing(beleg) -> bool:
+    """True wenn Spalte A keine nutzbare Beleg-Nr. hat."""
+    if _cell_is_blank(beleg):
+        return True
+    if isinstance(beleg, str) and beleg.strip() in ("-", "–", "—", "?"):
+        return True
+    return False
+
+
+def _beleg_as_int(beleg) -> Optional[int]:
+    """Numerische Beleg-Nr. (84, 100, '0001'); Formeln/leer → None."""
+    if isinstance(beleg, str) and beleg.strip().startswith("="):
+        return None
+    if _beleg_nr_missing(beleg):
+        return None
+    if isinstance(beleg, bool):
+        return None
+    if isinstance(beleg, (int, float)):
+        return int(beleg)
+    s = str(beleg).strip().replace(" ", "")
+    if re.fullmatch(r"\d+", s):
+        return int(s)
+    return None
+
+
+BELEG_AUTO_COMMENT = "Automatisch vergeben – bitte prüfen!"
+
+
+def _row_has_invoice_content(ws, row: int) -> bool:
+    """True wenn die Zeile wie eine Rechnung aussieht (nicht nur Padding)."""
+    beleg = ws.cell(row=row, column=1).value
+    re_raw = ws.cell(row=row, column=2).value
+    absender = ws.cell(row=row, column=5).value
+    beschreibung = ws.cell(row=row, column=6).value
+    absender_s = str(absender).strip() if absender else ""
+    beschreibung_s = str(beschreibung).strip() if beschreibung else ""
+    h = _cell_as_float(ws.cell(row=row, column=8).value)
+    i = _cell_as_float(ws.cell(row=row, column=9).value)
+    return (
+        (not _cell_is_blank(beleg) and not (isinstance(beleg, str) and beleg.startswith("=")))
+        or _parse_excel_date(re_raw) is not None
+        or bool(absender_s)
+        or bool(beschreibung_s)
+        or h is not None
+        or i is not None
+    )
+
+
+def _max_existing_beleg_nr(ws) -> int:
+    mx = 0
+    for row in range(5, ws.max_row + 1):
+        n = _beleg_as_int(ws.cell(row=row, column=1).value)
+        if n is not None and n > mx:
+            mx = n
+    return mx
+
+
+def _beleg_cell_assignable(cell) -> bool:
+    """
+    Wie Matching-Schreibschutz: nur wirklich leere Zellen, keine Formeln,
+    keine vorhandenen Werte (auch keine Platzhalter).
+    """
+    return _cell_is_writable(cell)
+
+
+def plan_auto_beleg_numbers(excel_path) -> list:
+    """
+    Plant fortlaufende Beleg-Nrn. für Inhaltszeilen mit leerer Spalte A.
+    Start = max(vorhandene numerische Beleg-Nrn.) + 1.
+    Schreibt nicht. Formeln und befüllte Zellen werden übersprungen.
+    Rückgabe: [{row, proposed_beleg_nr, absender, ...}, ...]
+    """
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
+
+    # Ohne data_only: Formeln in A erkennen (nicht überschreiben)
+    wb = openpyxl.load_workbook(excel_path)
+    ws = _get_invoice_sheet(wb)
+    next_nr = _max_existing_beleg_nr(ws) + 1
+    max_existing = next_nr - 1
+    planned = []
+    for row in range(5, ws.max_row + 1):
+        if not _row_has_invoice_content(ws, row):
+            continue
+        cell_a = ws.cell(row=row, column=1)
+        if not _beleg_cell_assignable(cell_a):
+            continue
+        absender = ws.cell(row=row, column=5).value
+        beschreibung = ws.cell(row=row, column=6).value
+        planned.append({
+            "row": row,
+            "beleg_nr": None,
+            "proposed_beleg_nr": next_nr,
+            "re_dat": _parse_excel_date(ws.cell(row=row, column=2).value),
+            "absender": str(absender).strip() if absender else "",
+            "beschreibung": str(beschreibung).strip() if beschreibung else "",
+            "betrag": (
+                _cell_as_float(ws.cell(row=row, column=9).value)
+                or _cell_as_float(ws.cell(row=row, column=8).value)
+            ),
+            "code": "beleg_auto_assign",
+            "message": (
+                f"Zeile {row}: Beleg-Nr. → {next_nr} "
+                f"(automatisch, bitte prüfen)"
+            ),
+            "max_existing_beleg_nr": max_existing,
+        })
+        next_nr += 1
+    wb.close()
+    return planned
+
+
+def apply_auto_beleg_numbers(excel_path, planned: list | None = None) -> list:
+    """
+    Vergibt Beleg-Nrn. in Spalte A (gelb + „bitte prüfen“).
+
+    Schreibschutz (wie Bank-Match):
+      - nur leere Zellen (keine vorhandenen Werte/Platzhalter)
+      - keine Formeln
+      - Nummern werden live aus max(A)+1 neu berechnet (kein Blind-Schreiben
+        aus veralteter Vorschau)
+      - bestehende Füllungen/Kommentare auf nicht-leeren Zellen bleiben unberührt
+    """
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
+
+    wb = openpyxl.load_workbook(excel_path)
+    ws = _get_invoice_sheet(wb)
+
+    # Zeilenreihenfolge: Vorschau beibehalten, sonst Sheet-Scan
+    if planned:
+        candidate_rows = [p["row"] for p in planned if p.get("row") is not None]
+    else:
+        candidate_rows = [
+            row for row in range(5, ws.max_row + 1)
+            if _row_has_invoice_content(ws, row)
+        ]
+
+    next_nr = _max_existing_beleg_nr(ws) + 1
+    applied = []
+    for row in candidate_rows:
+        cell = ws.cell(row=row, column=1)
+        if not _beleg_cell_assignable(cell):
+            continue
+        if not _row_has_invoice_content(ws, row):
+            continue
+
+        cell.value = next_nr
+        cell.fill = PatternFill("solid", fgColor=COLOR_OCR_BG)
+        cell.font = Font(size=10)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = BORDER
+        cell.comment = _make_comment(BELEG_AUTO_COMMENT)
+
+        absender = ws.cell(row=row, column=5).value
+        beschreibung = ws.cell(row=row, column=6).value
+        applied.append({
+            "row": row,
+            "beleg_nr": next_nr,
+            "proposed_beleg_nr": next_nr,
+            "re_dat": _parse_excel_date(ws.cell(row=row, column=2).value),
+            "absender": str(absender).strip() if absender else "",
+            "beschreibung": str(beschreibung).strip() if beschreibung else "",
+            "betrag": (
+                _cell_as_float(ws.cell(row=row, column=9).value)
+                or _cell_as_float(ws.cell(row=row, column=8).value)
+            ),
+            "code": "beleg_auto_assign",
+            "message": (
+                f"Zeile {row}: Beleg-Nr. → {next_nr} "
+                f"(automatisch, bitte prüfen)"
+            ),
+        })
+        next_nr += 1
+
+    if applied:
+        wb.save(excel_path)
+    wb.close()
+    return applied
+
+
+def collect_missing_beleg_issues(invoices: list, planned: list | None = None) -> list:
+    """
+    Datenqualität / Auto-Vergabe-Vorschau für Zeilen ohne Beleg-Nr.
+    planned: optional plan_auto_beleg_numbers()-Ergebnis (proposed_beleg_nr).
+    """
+    by_row = {p["row"]: p for p in (planned or [])}
+    issues = []
+    for inv in invoices:
+        if not _beleg_nr_missing(inv.get("beleg_nr")):
+            continue
+        prop = by_row.get(inv.get("row"), {})
+        proposed = prop.get("proposed_beleg_nr")
+        issues.append({
+            "row": inv.get("row"),
+            "beleg_nr": inv.get("beleg_nr"),
+            "proposed_beleg_nr": proposed,
+            "re_dat": inv.get("re_dat"),
+            "absender": inv.get("absender") or "",
+            "beschreibung": inv.get("beschreibung") or "",
+            "betrag": inv.get("betrag"),
+            "code": "beleg_auto_assign",
+            "message": (
+                f"Zeile {inv.get('row')}: Beleg-Nr. → {proposed} "
+                f"(automatisch, bitte prüfen)"
+                if proposed is not None
+                else (
+                    f"Zeile {inv.get('row')}: Beleg-Nr. (Spalte A) fehlt – "
+                    f"{(inv.get('absender') or inv.get('beschreibung') or 'ohne Absender')}"
+                )
+            ),
+        })
+    return issues
+
+
 def read_invoices_for_matching(excel_path) -> list:
     """
     Liest Rechnungszeilen mit **leerem Zahlungsdatum (C)** fürs Matching.
     Rückgabe: [{row, beleg_nr, re_dat, absender, beschreibung, betrag}, ...]
+
+    Zeilen ohne Beleg-Nr. (A) werden mitgenommen, wenn sonst Inhalt da ist
+    (Re-Dat / Absender / Beschreibung / Betrag) – in bearbeiteten Dateien
+    fehlen Belegnummern oft, obwohl die Rechnung vollständig ist.
+    Reine Padding-Zeilen (alles leer) werden übersprungen.
+    Beim Schreiben vergibt apply_auto_beleg_numbers() fortlaufende Nummern
+    (gelb + „bitte prüfen“).
+
+    Betrag für Bank-Abgleich:
+      Spalte I (Rechnungssumme inkl. Privatanteil), falls gesetzt –
+      die Bank bucht den Vollbetrag. Sonst Spalte H (Rechnungssumme).
+      H ist oft eine Anteil-Formel (z. B. I*0.11); ohne Excel-Cache liefert
+      data_only dafür None – I bleibt dann die einzige nutzbare Zahl.
     """
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Excel nicht gefunden: {excel_path}")
@@ -899,26 +1145,37 @@ def read_invoices_for_matching(excel_path) -> list:
     ws = _get_invoice_sheet(wb)
     invoices = []
     for row in range(5, ws.max_row + 1):
-        beleg = ws.cell(row=row, column=1).value
-        if beleg is None or beleg == "":
-            continue
         zahlung = ws.cell(row=row, column=3).value
-        if zahlung is not None and zahlung != "":
+        if not _cell_is_blank(zahlung):
             continue  # Entscheidung #2: nur leeres C
+
+        beleg = ws.cell(row=row, column=1).value
         re_dat = _parse_excel_date(ws.cell(row=row, column=2).value)
         absender = ws.cell(row=row, column=5).value
         beschreibung = ws.cell(row=row, column=6).value
-        betrag = ws.cell(row=row, column=8).value
-        try:
-            betrag_f = float(betrag) if betrag is not None and betrag != "" else None
-        except (TypeError, ValueError):
-            betrag_f = None
+        absender_s = str(absender).strip() if absender else ""
+        beschreibung_s = str(beschreibung).strip() if beschreibung else ""
+        # Bank = Vollbetrag (I), steuerlicher Anteil (H) nur als Fallback
+        betrag_f = _cell_as_float(ws.cell(row=row, column=9).value)
+        if betrag_f is None:
+            betrag_f = _cell_as_float(ws.cell(row=row, column=8).value)
+
+        has_content = (
+            not _cell_is_blank(beleg)
+            or re_dat is not None
+            or bool(absender_s)
+            or bool(beschreibung_s)
+            or betrag_f is not None
+        )
+        if not has_content:
+            continue  # Padding / leere Tabellenzeile
+
         invoices.append({
             "row": row,
             "beleg_nr": beleg,
             "re_dat": re_dat,
-            "absender": str(absender).strip() if absender else "",
-            "beschreibung": str(beschreibung).strip() if beschreibung else "",
+            "absender": absender_s,
+            "beschreibung": beschreibung_s,
             "betrag": betrag_f,
         })
     wb.close()
@@ -1072,10 +1329,18 @@ def prepare_stb_export(excel_path) -> dict:
     cleared_c = 0
     cleared_status = 0
     cleared_text = 0
+    cleared_beleg_auto = 0
 
     for row in range(5, ws.max_row + 1):
-        if ws.cell(row=row, column=1).value in (None, ""):
+        cell_a = ws.cell(row=row, column=1)
+        if cell_a.value in (None, ""):
             continue
+        # Auto-Beleg-Markierung entfernen (Nummer bleibt)
+        cmt = cell_a.comment
+        if cmt and BELEG_AUTO_COMMENT in (cmt.text or ""):
+            _clear_cell_fill_comment(cell_a)
+            cleared_beleg_auto += 1
+
         cell_c = ws.cell(row=row, column=3)
         if not _is_formula_cell(cell_c):
             had_fill = cell_c.fill and cell_c.fill.fill_type is not None
@@ -1109,5 +1374,6 @@ def prepare_stb_export(excel_path) -> dict:
         "cleared_payment_styles": cleared_c,
         "cleared_status": cleared_status,
         "cleared_text_styles": cleared_text,
+        "cleared_beleg_auto_styles": cleared_beleg_auto,
         "status_column_hidden": bool(col_status),
     }

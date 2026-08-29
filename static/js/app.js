@@ -1210,37 +1210,61 @@ function renderBankMatchResult(data) {
   html += '<span class="bank-pill bank-pill-ambig">mehrdeutig ' + (s.mehrdeutig || 0) + "</span> · ";
   html += '<span class="bank-pill bank-pill-miss">nicht gefunden ' + (s.nicht_gefunden || 0) + "</span> · ";
   html += '<span class="bank-pill bank-pill-amt">kein Betrag ' + (s.kein_betrag || 0) + "</span>";
+  if (s.ohne_beleg_nr || s.beleg_auto) {
+    html += ' · <span class="bank-pill bank-pill-warn">Beleg-Nr. auto '
+      + (s.beleg_auto || s.ohne_beleg_nr || 0) + "</span>";
+  }
   html += "</div>";
   if (data.excel_rel_path) {
     html += "<p>Excel: <code>" + data.excel_rel_path + "</code></p>";
   }
   html += "<p class=\"field-hint\">Spalte C: gruen=Datum gesetzt, gelb=mehrdeutig, rot=nicht gefunden, grau=kein Betrag. "
+    + "Fehlende Beleg-Nr. (A) werden fortlaufend vergeben und gelb markiert („bitte pruefen“). "
     + "Vor STB-Abgabe gelb/rot klaeren oder „STB-Export vorbereiten“.</p>";
+  const missing = data.beleg_auto_assigned || data.missing_beleg_nr || data.data_issues || [];
+  if (missing.length) {
+    html += "<details open><summary>Beleg-Nr. automatisch (" + missing.length
+      + ") – gelb = bitte pruefen</summary><ul>";
+    missing.slice(0, 25).forEach(function (u) {
+      const nr = u.beleg_nr != null && u.beleg_nr !== ""
+        ? u.beleg_nr
+        : (u.proposed_beleg_nr != null ? "→ " + u.proposed_beleg_nr : "?");
+      html += "<li>Zeile " + (u.row || "?") + " · Beleg " + nr + " · "
+        + (u.absender || u.beschreibung || "–")
+        + (u.betrag != null ? " · " + u.betrag : "")
+        + "</li>";
+    });
+    html += "</ul></details>";
+  }
   if ((data.matches || []).length) {
     html += "<details open><summary>Gefunden (" + data.matches.length + ")</summary><ul>";
     data.matches.slice(0, 20).forEach(function (m) {
-      html += "<li>Beleg " + (m.beleg_nr || "?") + " → " + (m.date || "") + " · " + (m.text || "").slice(0, 80) + "</li>";
+      html += "<li>" + (m.beleg_nr != null && m.beleg_nr !== "" ? "Beleg " + m.beleg_nr : "Zeile " + (m.invoice_row || "?"))
+        + " → " + (m.date || "") + " · " + (m.text || "").slice(0, 80) + "</li>";
     });
     html += "</ul></details>";
   }
   if ((data.ambiguous || []).length) {
     html += "<details open><summary>Mehrdeutig (" + data.ambiguous.length + ")</summary><ul>";
     data.ambiguous.slice(0, 15).forEach(function (a) {
-      html += "<li>Beleg " + (a.beleg_nr || "?") + " · " + (a.candidates || []).length + " Kandidaten</li>";
+      html += "<li>" + (a.beleg_nr != null && a.beleg_nr !== "" ? "Beleg " + a.beleg_nr : "Zeile " + (a.row || "?"))
+        + " · " + (a.candidates || []).length + " Kandidaten</li>";
     });
     html += "</ul></details>";
   }
   if ((data.unmatched || []).length) {
     html += "<details><summary>Nicht gefunden (" + data.unmatched.length + ")</summary><ul>";
     data.unmatched.slice(0, 20).forEach(function (u) {
-      html += "<li>Beleg " + (u.beleg_nr || "?") + " · " + (u.beschreibung || u.absender || "") + "</li>";
+      html += "<li>" + (u.beleg_nr != null && u.beleg_nr !== "" ? "Beleg " + u.beleg_nr : "Zeile " + (u.row || "?"))
+        + " · " + (u.beschreibung || u.absender || "") + "</li>";
     });
     html += "</ul></details>";
   }
   if ((data.no_amount || []).length) {
     html += "<details><summary>Kein Betrag (" + data.no_amount.length + ")</summary><ul>";
     data.no_amount.slice(0, 20).forEach(function (u) {
-      html += "<li>Beleg " + (u.beleg_nr || "?") + " · " + (u.beschreibung || u.absender || "") + "</li>";
+      html += "<li>" + (u.beleg_nr != null && u.beleg_nr !== "" ? "Beleg " + u.beleg_nr : "Zeile " + (u.row || "?"))
+        + " · " + (u.beschreibung || u.absender || "") + "</li>";
     });
     html += "</ul></details>";
   }
@@ -1317,13 +1341,19 @@ async function bankCsvMatch(dryRun) {
       return;
     }
     const s = bankLastPreviewStats;
-    const ok = window.confirm(
+    const autoN = s.beleg_auto || s.ohne_beleg_nr || 0;
+    let msg =
       "Zuordnung ins Excel schreiben?\n\n" +
       "gefunden: " + (s.gefunden || 0) + " (C = Datum, gruen)\n" +
       "mehrdeutig: " + (s.mehrdeutig || 0) + " (C leer, gelb)\n" +
       "nicht gefunden: " + (s.nicht_gefunden || 0) + " (C leer, rot)\n" +
-      "kein Betrag: " + (s.kein_betrag || 0) + " (C leer, grau)"
-    );
+      "kein Betrag: " + (s.kein_betrag || 0) + " (C leer, grau)";
+    if (autoN) {
+      msg +=
+        "\n\n" + autoN + " fehlende Beleg-Nr. werden fortlaufend vergeben\n" +
+        "und in Spalte A gelb markiert („bitte pruefen“).";
+    }
+    const ok = window.confirm(msg);
     if (!ok) return;
   }
   try {
@@ -1341,15 +1371,22 @@ async function bankCsvMatch(dryRun) {
       bankDryRunOk = true;
       bankLastPreviewStats = data.stats || {};
       setBankApplyEnabled(true);
+      const autoN = (data.stats && (data.stats.beleg_auto || data.stats.ohne_beleg_nr)) || 0;
+      const warn = autoN
+        ? " " + autoN + " Beleg-Nr. werden beim Schreiben automatisch vergeben (gelb = pruefen)."
+        : "";
       bankMatchShowMsg(
-        "Vorschau fertig – bitte Zaehler pruefen. Danach „Zuordnung schreiben“ freigeschaltet.",
+        "Vorschau fertig – bitte Zaehler pruefen. Danach „Zuordnung schreiben“ freigeschaltet." + warn,
         false
       );
     } else {
       invalidateBankDryRun();
+      const belegMsg = data.beleg_assigned
+        ? " Beleg-Nr. vergeben: " + data.beleg_assigned + " (gelb = bitte pruefen)."
+        : "";
       bankMatchShowMsg(
-        "Geschrieben. Excel-Updates: " + (data.excel_updated || 0) +
-        ". Vor STB-Abgabe gelb/rot klaeren oder STB-Export vorbereiten.",
+        "Geschrieben. Excel-Updates: " + (data.excel_updated || 0) + "." + belegMsg +
+        " Vor STB-Abgabe gelb/rot klaeren oder STB-Export vorbereiten.",
         false
       );
     }

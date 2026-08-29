@@ -12,7 +12,8 @@ from flask import Flask, render_template, request, jsonify, send_file
 from excel_export import create_excel, update_excel_with_ocr, \
                          append_to_excel, get_existing_doc_ids, \
                          read_invoices_for_matching, update_excel_with_bank_matches, \
-                         prepare_stb_export
+                         prepare_stb_export, collect_missing_beleg_issues, \
+                         plan_auto_beleg_numbers, apply_auto_beleg_numbers
 from pdf_export import download_pdfs
 from llm_extract import extract_from_ocr, check_ollama_available
 from bank_csv import parse_bank_csv, csv_preview
@@ -1044,12 +1045,20 @@ def _serialize_match_result(result: dict) -> dict:
             out["re_dat"] = d.isoformat()
         return out
 
+    stats = dict(result.get("stats") or {})
+    missing = result.get("missing_beleg_nr") or []
+    stats.setdefault("ohne_beleg_nr", len(missing))
+    stats.setdefault("beleg_auto", len(missing))
+
     return {
         "matches": [_ser_match(m) for m in result.get("matches", [])],
         "ambiguous": [_ser_inv(a) for a in result.get("ambiguous", [])],
         "unmatched": [_ser_inv(u) for u in result.get("unmatched", [])],
         "no_amount": [_ser_inv(n) for n in result.get("no_amount", [])],
-        "stats": result.get("stats", {}),
+        "missing_beleg_nr": [_ser_inv(x) for x in missing],
+        "beleg_auto_assigned": [_ser_inv(x) for x in missing],
+        "data_issues": [_ser_inv(x) for x in missing],
+        "stats": stats,
     }
 
 
@@ -1103,6 +1112,9 @@ def api_bank_csv_match():
 
     csv_rel_path | file | upload_key
     excel_rel_path | excel_file | year_label (Fallback)
+
+    Zeilen ohne Beleg-Nr. werden gematcht. Beim Schreiben vergibt die App
+    fortlaufende Nummern (max+1…) und markiert Spalte A gelb „bitte prüfen“.
     """
     if request.content_type and "multipart/form-data" in (request.content_type or ""):
         data = request.form.to_dict()
@@ -1125,10 +1137,25 @@ def api_bank_csv_match():
             csv_path, debits_only=debits_only, only_relevant=only_relevant
         )
         invoices = read_invoices_for_matching(excel_path)
+        planned_beleg = plan_auto_beleg_numbers(excel_path)
+        missing_beleg = collect_missing_beleg_issues(invoices, planned_beleg)
         result = match_invoices_to_bank(invoices, bank_rows)
+        result["missing_beleg_nr"] = missing_beleg
+        if result.get("stats") is not None:
+            result["stats"]["ohne_beleg_nr"] = len(missing_beleg)
+            result["stats"]["beleg_auto"] = len(planned_beleg)
 
         excel_updated = 0
+        beleg_assigned = 0
         if not dry_run:
+            applied = apply_auto_beleg_numbers(excel_path, planned_beleg)
+            beleg_assigned = len(applied)
+            # Nummern in der Response spiegeln
+            for a in applied:
+                for m in missing_beleg:
+                    if m.get("row") == a.get("row"):
+                        m["beleg_nr"] = a.get("beleg_nr")
+                        m["proposed_beleg_nr"] = a.get("beleg_nr")
             excel_updated = update_excel_with_bank_matches(excel_path, result)
             with job_lock:
                 job_status["excel_path"] = excel_path
@@ -1140,6 +1167,7 @@ def api_bank_csv_match():
         payload["csv_rel_path"] = csv_rel
         payload["year_label"] = year_label
         payload["excel_updated"] = excel_updated
+        payload["beleg_assigned"] = beleg_assigned
         payload["bank_rows_total"] = len(bank_rows)
         payload["bank_rows_selected"] = sum(1 for b in bank_rows if b.get("selected"))
         return jsonify(payload)

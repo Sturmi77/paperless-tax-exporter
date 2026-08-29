@@ -186,6 +186,164 @@ class TestExcelBankUpdate:
         assert inv[0]["beleg_nr"] == 1
         assert inv[0]["betrag"] == 42.50
 
+    def test_betrag_prefers_column_i_full_amount(self, tmp_path):
+        """Bank bucht Vollbetrag (I); H oft Anteil-Formel ohne Cache → None."""
+        docs = [{
+            "id": 1, "title": "Muell", "created": "2025-07-21",
+            "archive_serial_number": 96, "correspondent_name": "Gemeindeverband",
+        }]
+        path = str(tmp_path / "privatanteil.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        # Wie in bearbeiteter STB-Datei: H = Anteil-Formel, I = Zahlungsbetrag
+        ws.cell(row=5, column=8).value = (
+            "=Tabelle1[[#This Row],[Rechnungs-\nsumme inkl. Privatanteil]]*0.11"
+        )
+        ws.cell(row=5, column=9).value = 185.66
+        wb.save(path)
+        inv = read_invoices_for_matching(path)
+        assert len(inv) == 1
+        assert inv[0]["betrag"] == 185.66
+
+    def test_rows_without_beleg_nr_but_with_content(self, tmp_path):
+        """Zeilen ohne A, aber mit Absender/Datum/Betrag, sind matchbar."""
+        from datetime import date
+        docs = [{
+            "id": 1, "title": "Mit Beleg", "created": "2025-01-10",
+            "archive_serial_number": 1, "correspondent_name": "ACME",
+        }]
+        path = str(tmp_path / "ohne_beleg.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 10.0
+        # Extra-Zeile: kein Beleg-Nr., sonst voll
+        ws.cell(row=6, column=1).value = None
+        ws.cell(row=6, column=2).value = date(2025, 10, 24)
+        ws.cell(row=6, column=5).value = "Stadtgemeinde Hollabrunn"
+        ws.cell(row=6, column=6).value = "Wasser"
+        ws.cell(row=6, column=9).value = 267.39
+        # Padding-Zeile ohne Inhalt
+        ws.cell(row=7, column=1).value = None
+        wb.save(path)
+        inv = read_invoices_for_matching(path)
+        assert len(inv) == 2
+        assert inv[0]["beleg_nr"] == 1
+        assert inv[1]["beleg_nr"] is None
+        assert inv[1]["absender"] == "Stadtgemeinde Hollabrunn"
+        assert inv[1]["betrag"] == 267.39
+
+    def test_collect_missing_beleg_issues(self, tmp_path):
+        from datetime import date
+        from excel_export import collect_missing_beleg_issues, plan_auto_beleg_numbers
+        docs = [{
+            "id": 1, "title": "Mit Beleg", "created": "2025-01-10",
+            "archive_serial_number": 1, "correspondent_name": "ACME",
+        }]
+        path = str(tmp_path / "issues.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 10.0
+        ws.cell(row=6, column=1).value = None
+        ws.cell(row=6, column=2).value = date(2025, 10, 24)
+        ws.cell(row=6, column=5).value = "Hollabrunn"
+        ws.cell(row=6, column=9).value = 50.0
+        wb.save(path)
+        inv = read_invoices_for_matching(path)
+        planned = plan_auto_beleg_numbers(path)
+        issues = collect_missing_beleg_issues(inv, planned)
+        assert len(issues) == 1
+        assert issues[0]["row"] == 6
+        assert issues[0]["proposed_beleg_nr"] == 2  # max existing = 1
+        assert issues[0]["code"] == "beleg_auto_assign"
+
+    def test_apply_auto_beleg_numbers_yellow(self, tmp_path):
+        from datetime import date
+        from excel_export import (
+            apply_auto_beleg_numbers, plan_auto_beleg_numbers, COLOR_OCR_BG,
+            BELEG_AUTO_COMMENT,
+        )
+        docs = [
+            {"id": 1, "title": "A", "created": "2025-01-10",
+             "archive_serial_number": 10, "correspondent_name": "ACME"},
+            {"id": 2, "title": "B", "created": "2025-01-11",
+             "archive_serial_number": 50, "correspondent_name": "Beta"},
+        ]
+        path = str(tmp_path / "auto_beleg.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 1.0
+        ws.cell(row=6, column=8).value = 2.0
+        # Dritte Zeile ohne Beleg
+        ws.cell(row=7, column=1).value = None
+        ws.cell(row=7, column=2).value = date(2025, 2, 1)
+        ws.cell(row=7, column=5).value = "Neu GmbH"
+        ws.cell(row=7, column=9).value = 99.0
+        wb.save(path)
+
+        planned = plan_auto_beleg_numbers(path)
+        assert len(planned) == 1
+        assert planned[0]["proposed_beleg_nr"] == 51  # max(10,50)+1
+
+        applied = apply_auto_beleg_numbers(path, planned)
+        assert len(applied) == 1
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        cell = ws2.cell(row=7, column=1)
+        assert cell.value == 51
+        assert cell.fill.fgColor.rgb[-6:].upper() == COLOR_OCR_BG
+        assert cell.comment is not None
+        assert BELEG_AUTO_COMMENT in (cell.comment.text or "")
+
+    def test_auto_beleg_does_not_overwrite_existing_or_formula(self, tmp_path):
+        """Schreibschutz: vorhandene A-Werte und Formeln bleiben."""
+        from datetime import date
+        from excel_export import apply_auto_beleg_numbers, plan_auto_beleg_numbers
+        docs = [{
+            "id": 1, "title": "A", "created": "2025-01-10",
+            "archive_serial_number": 5, "correspondent_name": "ACME",
+        }]
+        path = str(tmp_path / "preserve_a.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        ws.cell(row=5, column=8).value = 1.0
+        # Zeile mit Formel in A
+        ws.cell(row=6, column=1).value = "=5+1"
+        ws.cell(row=6, column=2).value = date(2025, 2, 1)
+        ws.cell(row=6, column=5).value = "Formel GmbH"
+        ws.cell(row=6, column=9).value = 10.0
+        # Zeile mit Platzhalter (gilt als vorhandener Wert)
+        ws.cell(row=7, column=1).value = "-"
+        ws.cell(row=7, column=2).value = date(2025, 2, 2)
+        ws.cell(row=7, column=5).value = "Platzhalter AG"
+        ws.cell(row=7, column=9).value = 11.0
+        # Wirklich leere A → darf vergeben werden
+        ws.cell(row=8, column=1).value = None
+        ws.cell(row=8, column=2).value = date(2025, 2, 3)
+        ws.cell(row=8, column=5).value = "Neu GmbH"
+        ws.cell(row=8, column=9).value = 12.0
+        wb.save(path)
+
+        planned = plan_auto_beleg_numbers(path)
+        assert len(planned) == 1
+        assert planned[0]["row"] == 8
+        assert planned[0]["proposed_beleg_nr"] == 6  # max=5
+
+        applied = apply_auto_beleg_numbers(path, planned)
+        assert len(applied) == 1
+        assert applied[0]["beleg_nr"] == 6
+
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        assert ws2.cell(row=5, column=1).value == 5
+        assert ws2.cell(row=6, column=1).value == "=5+1"
+        assert ws2.cell(row=7, column=1).value == "-"
+        assert ws2.cell(row=8, column=1).value == 6
+
     def test_update_colors_c_and_preserves_formulas(self, tmp_path):
         from datetime import date
         docs = [{
