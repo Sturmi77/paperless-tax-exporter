@@ -609,3 +609,86 @@ class TestExcelBankUpdate:
         names = [c.name for c in t1.tableColumns]
         assert len(names) == len(set(n.lower() for n in names))
         assert any("Match-Status" in n or "match" in n.lower() for n in names)
+
+    def test_structured_formula_survives_bank_match_write(self, tmp_path):
+        """
+        Strukturierte Tabellenformel mit Zeilenumbruch im Spaltennamen
+        darf durch Match-Schreiben nicht zu #BEZUG! / Header-Rewrite werden.
+        """
+        from openpyxl.utils import range_boundaries
+
+        docs = [{
+            "id": 1, "title": "Muell", "created": "2025-07-21",
+            "archive_serial_number": 96, "correspondent_name": "Gemeindeverband",
+        }]
+        path = str(tmp_path / "struct_formula.xlsx")
+        create_excel(docs, {}, path, "2025")
+        wb = openpyxl.load_workbook(path)
+        ws = wb["Rechnungsaufstellung"]
+        # Wie in bearbeiteter Datei: Header mit \\n, Formel mit strukturiertem Bezug
+        ws.cell(row=4, column=9).value = "Rechnungs-\nsumme inkl. Privatanteil"
+        ws.cell(row=5, column=9).value = 185.66
+        formula = '=Tabelle1[[#This Row],[Rechnungs-\nsumme inkl. Privatanteil]]*0.11'
+        ws.cell(row=5, column=8).value = formula
+        # Tabelle auf Spalte I erweitern (wie reale Datei)
+        t1 = [t for t in ws.tables.values() if t.displayName == "Tabelle1"][0]
+        c1, r1, c2, r2 = range_boundaries(t1.ref)
+        t1.ref = f"A{r1}:I{r2}"
+        # tableColumns wie von Excel/openpyxl: Name mit Leerzeichen (bereits „kaputt“ ok),
+        # Header-Zelle behält \\n – entscheidend: wir dürfen Header nicht umschreiben
+        from openpyxl.worksheet.table import TableColumn
+        cols = []
+        for idx, col in enumerate(range(c1, 10), start=1):
+            raw = ws.cell(row=4, column=col).value
+            # absichtlich space-Variante in tableColumns (wie in Produktivdatei)
+            name = str(raw).replace("\n", " ").strip() if raw else f"Spalte{idx}"
+            cols.append(TableColumn(id=idx, name=name))
+        t1.tableColumns = cols
+        header9_before = ws.cell(row=4, column=9).value
+        cols_before = [(c.id, c.name) for c in t1.tableColumns]
+        wb.save(path)
+
+        bank = parse_bank_csv(FIXTURE, debits_only=True)
+        bank = [b for b in bank if b["selected"] and "Duplikat" not in (b.get("text") or "")]
+        # Betrag für Match aus I (Vollbetrag) – Matching liest I/H
+        invoices = read_invoices_for_matching(path)
+        # Fixture-Betrag 42.50 – hier manuell Match-Ergebnis schreiben
+        from datetime import date as d
+        result = {
+            "matches": [{
+                "invoice_row": 5,
+                "date": d(2025, 7, 25),
+                "text": "Gemeindeverband: Ueberweisung Test",
+                "partner": "Gemeindeverband",
+                "amount": -185.66,
+                "bank_row_id": 1,
+                "status": "gefunden",
+                "score": 0.5,
+                "beleg_nr": 96,
+            }],
+            "ambiguous": [],
+            "unmatched": [],
+            "no_amount": [],
+        }
+        update_excel_with_bank_matches(path, result)
+
+        wb2 = openpyxl.load_workbook(path)
+        ws2 = wb2["Rechnungsaufstellung"]
+        assert ws2.cell(row=5, column=8).value == formula
+        assert ws2.cell(row=4, column=9).value == header9_before
+        # Datum in C, Buchungstext in eigener Spalte (nicht in C)
+        assert ws2.cell(row=5, column=3).value is not None
+        assert not isinstance(ws2.cell(row=5, column=3).value, str) or not ws2.cell(row=5, column=3).value.startswith("Gemeinde")
+        # Buchungstext-Spalte finden
+        headers = {
+            str(ws2.cell(4, c).value).replace("\n", " ").strip(): c
+            for c in range(1, ws2.max_column + 1)
+            if ws2.cell(4, c).value
+        }
+        col_bt = headers.get("Buchungstext")
+        assert col_bt is not None and col_bt != 3
+        assert "Ueberweisung" in str(ws2.cell(row=5, column=col_bt).value or "")
+        t1b = [t for t in ws2.tables.values() if t.displayName == "Tabelle1"][0]
+        cols_after = [(c.id, c.name) for c in t1b.tableColumns]
+        # Bestehende tableColumn-Namen unverändert (kein \\n→space Rewrite der ganzen Tabelle)
+        assert cols_after[:len(cols_before)] == cols_before

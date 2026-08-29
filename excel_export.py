@@ -715,7 +715,9 @@ def _ensure_bank_match_columns(ws) -> tuple:
         ws.column_dimensions[get_column_letter(col_status)].width = COLUMN_MATCH_STATUS[1]
         added = True
 
-    if added or tbl is not None:
+    # Tabelle nur erweitern, wenn wirklich neue Spalten angelegt wurden.
+    # Reines Sync bei jedem Schreiben zerstört strukturierte Formeln (#BEZUG!).
+    if added:
         _expand_table_columns_only(ws, max(col_text, col_status))
 
     return col_text, col_status
@@ -783,22 +785,50 @@ def _find_invoice_table(ws):
 
 def _sync_table_columns_from_header(ws, tbl) -> None:
     """
-    tableColumns + autoFilter an tbl.ref und Header-Zeile anpassen.
-    Verhindert Excel-Reparatur („Teil /xl/tables/tableN.xml entfernt“).
+    tableColumns + autoFilter an tbl.ref anpassen.
+
+    Wichtig für strukturierte Formeln (sonst #BEZUG! / Excel-Repair):
+      - bestehende tableColumn-Namen unverändert lassen
+      - Header-Zellen nie umbenennen / kein \\n→Leerzeichen
+      - nur für neu hinzugekommene Spalten Namen aus dem Header übernehmen
+        (exakter Zelltext inkl. Zeilenumbruch)
     """
     from openpyxl.utils import range_boundaries
     from openpyxl.worksheet.table import TableColumn
 
     min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+    needed = max_col - min_col + 1
+    existing = list(tbl.tableColumns) if tbl.tableColumns else []
+
+    # Schon konsistent → nichts anfassen (verhindert Excel-Repair)
+    if len(existing) == needed:
+        if tbl.autoFilter is not None:
+            tbl.autoFilter.ref = tbl.ref
+        return
+
     used_names = set()
     columns = []
+
+    # Bestehende Spalten 1:1 behalten (Namen unverändert)
+    for idx, old in enumerate(existing, start=1):
+        if idx > needed:
+            break
+        name = old.name
+        used_names.add(str(name).lower())
+        columns.append(TableColumn(id=idx, name=name))
+
+    # Nur neue Spalten rechts anhängen
     for idx, col in enumerate(range(min_col, max_col + 1), start=1):
+        if idx <= len(columns):
+            continue
         raw = ws.cell(row=min_row, column=col).value
-        name = str(raw).replace("\n", " ").strip() if raw not in (None, "") else ""
-        if not name:
+        # Exakter Header-Text – Zeilenumbrüche erhalten (strukturierte Bezüge)
+        if raw not in (None, ""):
+            name = str(raw)
+        else:
             name = f"Spalte{idx}"
+            # Nur leere Header füllen – nie bestehende umbenennen
             ws.cell(row=min_row, column=col).value = name
-        # Excel verlangt eindeutige Spaltennamen in Tabellen
         base = name
         n = 2
         while name.lower() in used_names:
@@ -828,8 +858,8 @@ def _table_ranges_overlap(ref_a: str, ref_b: str) -> bool:
 def _expand_table_columns_only(ws, last_col: int) -> None:
     """
     Erweitert NUR die Rechnungs-Tabelle nach rechts (Spalten).
-    Zeilenbereich unverändert. tableColumns werden synchronisiert (#32 / Repair-Fix).
-    Andere Tabellen werden nicht angefasst (Überlappung → Excel entfernt table2).
+    Zeilenbereich unverändert. Andere Tabellen unangetastet.
+    Wenn last_col bereits in tbl.ref liegt: kein Sync, keine Mutation.
     """
     from openpyxl.utils import range_boundaries
 
@@ -843,11 +873,7 @@ def _expand_table_columns_only(ws, last_col: int) -> None:
         return
 
     if last_col <= max_col:
-        # Ref passt schon – trotzdem Columns syncen falls Header neu sind
-        try:
-            _sync_table_columns_from_header(ws, tbl)
-        except Exception:
-            pass
+        # Spalten schon im Ref – Tabelle nicht anfassen (schützt Formeln / #BEZUG!)
         return
 
     new_ref = (
@@ -855,7 +881,6 @@ def _expand_table_columns_only(ws, last_col: int) -> None:
         f"{get_column_letter(last_col)}{max_row}"
     )
 
-    # Nicht erweitern, wenn eine andere Tabelle dadurch überlappen würde
     for other in ws.tables.values():
         if other is tbl or other.name == tbl.name:
             continue
@@ -869,7 +894,6 @@ def _expand_table_columns_only(ws, last_col: int) -> None:
         tbl.ref = new_ref
         _sync_table_columns_from_header(ws, tbl)
     except Exception:
-        # Tabelle nicht anfassen, wenn etwas schiefgeht
         return
 
 
@@ -1203,15 +1227,14 @@ def _style_payment_cell(cell, fill_color, comment=None):
 def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     """
     Schreibt Matching-Ergebnis NUR in die Rechnungs-Excel (Issue #32 / #34).
-    Führend: Spalte C (Zahlungsdatum) – Wert + Farbe.
+
+    Getrennte Zellen:
+      - Spalte C: nur Zahlungsdatum (+ Farbe/Kommentar)
+      - Spalte Buchungstext: nur Buchungstext
+      - Spalte Match-Status: nur Status
 
     Schreibschutz: Werte nur in zuvor leere Zellen (keine Formeln).
-    - C: Datum nur wenn leer
-    - Buchungstext: nur wenn leer
-    - Match-Status: nur wenn leer oder bekannter App-Status (Re-Run)
-    - Farbe/Kommentar auf C nur wenn C leer (kein Übermalen befüllter Daten)
-
-    Keine Zusatzdatei. Formeln und Tabellen-Zeilenbereiche bleiben erhalten.
+    Formeln und Tabellen-Definition bleiben erhalten (kein unnötiges tableColumns-Rewrite).
     """
     from matching_csv import (
         STATUS_FOUND, STATUS_AMBIGUOUS, STATUS_NOT_FOUND, STATUS_NO_AMOUNT,
@@ -1223,6 +1246,15 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
     wb = openpyxl.load_workbook(excel_path)
     ws = _get_invoice_sheet(wb)
     col_text, col_status = _ensure_bank_match_columns(ws)
+
+    # Harte Trennung: Datum nie in Buchungstext-/Status-Spalte und umgekehrt
+    if col_text in (3, col_status) or col_status == 3:
+        wb.close()
+        raise ValueError(
+            f"Ungültige Match-Spalten (C={3}, Buchungstext={col_text}, "
+            f"Match-Status={col_status}) – Abbruch ohne Schreiben."
+        )
+
     updated = 0
 
     def _set_status(row, status, fill_color, comment=None):
@@ -1244,6 +1276,7 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
         cell = ws.cell(row=row, column=col_text)
         if not _cell_is_writable(cell):
             return
+        # Nur Buchungstext – kein Datum in dieser Zelle
         cell.value = text or ""
         cell.fill = PatternFill("solid", fgColor=fill_color)
         cell.font = Font(size=10)
@@ -1252,7 +1285,7 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
         updated += 1
 
     def _mark_empty_c(row, fill_color, comment=None):
-        """Farbe/Kommentar auf C nur wenn leer (kein Wert schreiben)."""
+        """Farbe/Kommentar auf C nur wenn leer (kein Wert / kein Buchungstext)."""
         nonlocal updated
         cell_c = ws.cell(row=row, column=3)
         if not _cell_is_writable(cell_c):
@@ -1266,6 +1299,7 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
         if not _cell_is_writable(cell_c):
             # C belegt/Formel → weder Datum noch Hilfsspalten anfassen
             continue
+        # Spalte C: ausschließlich Datum
         cell_c.value = m["date"]
         cell_c.number_format = DATE_FORMAT
         _style_payment_cell(
@@ -1273,6 +1307,7 @@ def update_excel_with_bank_matches(excel_path, match_result: dict) -> int:
             "Aus Kontoauszug zugeordnet – bitte prüfen!",
         )
         updated += 1
+        # Spalte Buchungstext: ausschließlich Text (andere Zelle)
         _set_text(row, m.get("text") or "", COLOR_MATCH_OK)
         _set_status(row, STATUS_FOUND, COLOR_MATCH_OK)
 
